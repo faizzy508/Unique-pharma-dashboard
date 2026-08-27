@@ -19,6 +19,27 @@ import secrets
 import os
 warnings.filterwarnings('ignore')
 
+def run_migration_if_needed():
+    """Run Migration.py if the database does not exist or is empty."""
+    db_path = os.path.join(os.path.dirname(__file__), "duckdb", "business.db")
+    if not os.path.exists(db_path):
+        print("📦 Database not found – running Migration.py...")
+        os.system(f"{sys.executable} Migration.py")
+    else:
+        # Check if the main table exists
+        try:
+            conn = duckdb.connect(db_path)
+            conn.execute("SELECT 1 FROM dashboard_data LIMIT 1")
+            conn.close()
+        except:
+            print("⚠️ Main table missing – running Migration.py...")
+            conn.close()
+            os.system(f"{sys.executable} Migration.py")
+
+# Call it
+run_migration_if_needed()
+
+
 # ============================================================================
 # AUTHENTICATION MODULE (Integrated)
 # ============================================================================

@@ -4,18 +4,25 @@ set -e
 echo "=== Starting deployment at $(date) ==="
 echo "Current directory: $(pwd)"
 
-# Check if database already exists
-if [ -f "duckdb/business.db" ]; then
-    echo "✅ Database already exists, skipping creation"
-else
-    echo "📦 Database not found, creating sample data..."
-    python create_sample_db.py
-    if [ $? -ne 0 ]; then
-        echo "❌ Failed to create sample database"
-        exit 1
-    fi
-    echo "✅ Sample database created"
+# Ensure the duckdb directory exists
+mkdir -p duckdb
+
+# Run the real migration
+echo "📦 Running migration with real data..."
+START_TIME=$(date +%s)
+python Migration.py
+MIGRATION_EXIT=$?
+END_TIME=$(date +%s)
+DURATION=$((END_TIME - START_TIME))
+echo "Migration took $DURATION seconds."
+
+if [ $MIGRATION_EXIT -ne 0 ]; then
+    echo "❌ Migration failed with exit code $MIGRATION_EXIT"
+    exit 1
 fi
 
+echo "✅ Migration completed successfully"
+
+# Start the app
 echo "=== Starting Streamlit ==="
 streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --server.enableXsrfProtection=false

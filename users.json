@@ -1,0 +1,42 @@
+{
+  "admin": {
+    "password": "afb28c9b3ca2f9caa3fa7bff7ea259f2:860e261611ec40484ac091c6a4aa71555c060c2067c1d8dbd47a8b03015daf58",
+    "name": "System Administrator",
+    "role": "admin",
+    "email": "admin@uniquepharma.com",
+    "created": "2026-01-01T00:00:00",
+    "last_login": "2026-08-27T09:07:46.629457",
+    "active": true,
+    "permissions": [
+      "all"
+    ]
+  },
+  "manager": {
+    "password": "bd68db34b8b9bac92af8f66610e81aad:aec638cc23c93b07a083fb7c91d23783062fc3b161f7b3ce814e7ee0b2617b0d",
+    "name": "Pharma Manager",
+    "role": "manager",
+    "email": "manager@uniquepharma.com",
+    "created": "2026-01-01T00:00:00",
+    "last_login": null,
+    "active": true,
+    "permissions": [
+      "view_all",
+      "export_data",
+      "view_suppliers"
+    ]
+  },
+  "analyst": {
+    "password": "efdc4d532d8d8aee39824b8fab35691f:a173148ec8a2384792067839881bc8095c42da8fd595fa8b57fb8b23340b64c1",
+    "name": "Data Analyst",
+    "role": "analyst",
+    "email": "analyst@uniquepharma.com",
+    "created": "2026-01-01T00:00:00",
+    "last_login": null,
+    "active": true,
+    "permissions": [
+      "view_dashboard",
+      "view_reports",
+      "export_data"
+    ]
+  }
+}

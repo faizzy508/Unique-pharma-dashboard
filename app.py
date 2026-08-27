@@ -17,7 +17,8 @@ import re
 from collections import defaultdict
 import secrets
 import os
-warnings.filterwarnings('ignore')
+import sys   # <-- ADD THIS LINE
+from streamlit.runtime.scriptrunner import get_script_run_ctx
 
 def run_migration_if_needed():
     """Run Migration.py if the database does not exist or is empty."""

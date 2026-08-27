@@ -590,10 +590,26 @@ class StockFileProcessor:
 # ============================================================================
 class IncrementalFileProcessor:
     def __init__(self):
-        self.conn = duckdb.connect(DB_PATH)
+        # Retry connection on lock errors
+        max_retries = 5
+        conn = None
+        for attempt in range(max_retries):
+            try:
+                conn = duckdb.connect(DB_PATH)
+                break
+            except duckdb.IOException as e:
+                if "Resource temporarily unavailable" in str(e) and attempt < max_retries - 1:
+                    print(f"⚠️ Database locked, retrying... ({attempt+1}/{max_retries})")
+                    import time
+                    time.sleep(1.5)
+                else:
+                    raise
+        self.conn = conn
+
         self.sales_folder = SALES_PATH
         self.returns_folder = RETURNS_PATH
-        
+
+        # Create sales_raw and returns_raw tables
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS sales_raw (
                 Sale_Date DATE, Branch VARCHAR, Item_Code VARCHAR,

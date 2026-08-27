@@ -700,14 +700,19 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ============================================================================
-# DATABASE CONNECTION
-# ============================================================================
 
-DB_PATH = r"C:\Users\User\Desktop\Dashboard Working\duckdb\business.db"
+# ============================================================================
+# DATABASE CONNECTION - DYNAMIC PATH WITH RETRY
+# ============================================================================
+import os
+import time  # <-- Add this if not already imported at the top of the file
+
+BASE_PATH = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_PATH, "duckdb", "business.db")
+os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
 class DatabaseConnection:
-    """Centralized database connection management."""
+    """Centralized database connection management with retry on lock."""
     _instance = None
     _connection = None
     
@@ -718,8 +723,18 @@ class DatabaseConnection:
     
     def get_connection(self):
         if self._connection is None:
-            self._connection = duckdb.connect(DB_PATH)
-            self._connection.execute("PRAGMA memory_limit='4GB'")
+            max_retries = 5
+            for attempt in range(max_retries):
+                try:
+                    self._connection = duckdb.connect(DB_PATH)
+                    self._connection.execute("PRAGMA memory_limit='4GB'")
+                    break
+                except duckdb.IOException as e:
+                    if "Resource temporarily unavailable" in str(e) and attempt < max_retries - 1:
+                        print(f"⚠️ Database lock detected, retrying... ({attempt+1}/{max_retries})")
+                        time.sleep(1.5)
+                    else:
+                        raise
         return self._connection
 
 _db = DatabaseConnection()
@@ -4114,7 +4129,7 @@ def main():
                         ),
                         text=[f'{prefix_display}{v:,.0f}' for v in hist_net],
                         textposition='inside',
-                        textfont=dict(size=14, color='white', weight='bold'),
+                        textfont=dict(size=14, color='white', family='Arial Black, sans-serif'),
                         hovertemplate=f'<b>%{{x}}</b><br>Net {label_suffix_display}: %{{y:,.0f}}<extra></extra>',
                         width=0.5
                     ))
@@ -4130,7 +4145,7 @@ def main():
                         ),
                         text=[f'{prefix_display}{v:,.0f}' for v in forecast_vals],
                         textposition='inside',
-                        textfont=dict(size=14, color='white', weight='bold'),
+                        textfont=dict(size=14, color='white', family='Arial Black, sans-serif'),
                         hovertemplate=f'<b>%{{x}}</b><br>Forecast: %{{y:,.0f}}<extra></extra>',
                         width=0.5
                     ))

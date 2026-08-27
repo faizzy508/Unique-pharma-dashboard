@@ -1,16 +1,3 @@
-"""
-PHARMA BI - COMPLETE MIGRATION WITH FOC SUPPORT & SUPPLIER MASTER
-================================================================================
-- Full FOC (Free of Charge) support for sales and purchases
-- FOC-adjusted demand forecasting
-- FOC outlier detection
-- Complete supplier enhancements
-- Purchase returns properly handled
-- SUPPLIER MASTER integration with Lead Time
-- SAFETY STOCK calculation based on Lead Time
-- Date period filter fixes for dashboard
-"""
-
 import os
 import sys
 import json
@@ -25,10 +12,8 @@ import traceback
 import numpy as np
 warnings.filterwarnings('ignore')
 
-# ============================================================================
-# CONFIGURATION
-# ============================================================================
-BASE_PATH = r"C:\Users\User\Desktop\Dashboard Working"
+BASE_PATH = os.path.dirname(os.path.abspath(__file__))   # Current script folder
+
 DB_PATH = os.path.join(BASE_PATH, "duckdb", "business.db")
 LOG_PATH = os.path.join(BASE_PATH, "logs")
 METADATA_PATH = os.path.join(BASE_PATH, "metadata")
@@ -40,7 +25,7 @@ RETURNS_PATH = os.path.join(BASE_PATH, "Sales Return Data")
 LOC_MASTER_PATH = os.path.join(BASE_PATH, "Location & Branch Master", "Location & Branch Master.xlsx")
 ITEM_MASTER_PATH = os.path.join(BASE_PATH, "ITEM MASTER", "Item Master.xlsx")
 PRF_PO_PATH = os.path.join(BASE_PATH, "P.O.PRF,PI ETC")
-SUPPLIER_MASTER_PATH = r"C:\Users\User\Desktop\Dashboard Working\Supplier Master"
+SUPPLIER_MASTER_PATH = os.path.join(BASE_PATH, "Supplier Master")
 
 # Ensure directories exist
 Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
@@ -718,6 +703,7 @@ class IncrementalFileProcessor:
             df[date_col] = DateParser.parse(df[date_col])
             df = df.dropna(subset=[date_col])
             df = df.rename(columns={date_col: 'Sale_Date'})
+            df['Sale_Date'] = pd.to_datetime(df['Sale_Date']).dt.date
             
             rename_map = {
                 "BRANCH": "Branch", "INV.NO": "Invoice_No", "CUSTOMER NAME": "Customer_Name",
@@ -818,6 +804,7 @@ class IncrementalFileProcessor:
                     continue
 
                 df['Return_Date'] = pd.to_datetime(df['Return_Date'], errors='coerce')
+                df['Return_Date'] = df['Return_Date'].dt.date
                 df = df.dropna(subset=['Return_Date'])
 
                 for col in ['Return_Qty', 'Amount_USD']:
@@ -1040,10 +1027,6 @@ class SupplierMasterProcessor:
             traceback.print_exc()
             return None
 
-# ============================================================================
-# TABLE CREATION FUNCTIONS
-# ============================================================================
-
 def create_master_tables(conn):
     """Create master tables with enhanced supplier handling."""
     logger.log("📋 Creating item_master with supplier enhancements...", "PROGRESS")
@@ -1089,6 +1072,17 @@ def create_master_tables(conn):
         
         item_df['All_Suppliers'] = item_df.apply(get_all_suppliers, axis=1)
         
+        # ✅ Clean All_Suppliers to ensure it's a list of strings or None
+        def clean_supplier_list(val):
+            if val is None:
+                return None
+            if isinstance(val, list):
+                cleaned = [str(v).strip() for v in val if v and str(v).strip()]
+                return cleaned if cleaned else None
+            return None
+        
+        item_df['All_Suppliers'] = item_df['All_Suppliers'].apply(clean_supplier_list)
+        
         def get_primary_supplier(row):
             for col in supplier_cols:
                 if col in row and row[col] and row[col] != '' and str(row[col]).lower() not in ['nan', 'none', 'n/a']:
@@ -1097,9 +1091,50 @@ def create_master_tables(conn):
         
         item_df['Primary_Supplier'] = item_df.apply(get_primary_supplier, axis=1)
         
+        # Keep the registered pandas relation concrete; DuckDB 0.9.2 cannot
+        # reliably cast values from columns inferred as the NULL type.
+        item_columns = [
+            'Item_Code', 'Item_Name', 'Brand_Name', 'Product_Group', 'Division',
+            'Dosage_Form', 'Strength', 'Pack_Size', 'Route_Admin', 'Indications',
+            'Posology', *supplier_cols, 'Primary_Supplier'
+        ]
+        for col in item_columns:
+            if col not in item_df.columns:
+                item_df[col] = ''
+            item_df[col] = item_df[col].fillna('').astype(str)
+        item_df['All_Suppliers'] = item_df['All_Suppliers'].apply(
+            lambda value: value if isinstance(value, list) else []
+        )
+        
         conn.register('item_temp', item_df)
+        
+        # ✅ Create table with explicit schema to avoid cast errors
         conn.execute("DROP TABLE IF EXISTS item_master")
-        conn.execute("CREATE TABLE item_master AS SELECT * FROM item_temp")
+        # Build directly from a typed projection because DuckDB infers all-null
+        # pandas columns as NULL during an INSERT into a pre-created table.
+        conn.execute("""
+            CREATE TABLE item_master AS
+            SELECT 
+                CAST(Item_Code AS VARCHAR) AS Item_Code,
+                CAST(Item_Name AS VARCHAR) AS Item_Name,
+                CAST(Brand_Name AS VARCHAR) AS Brand_Name,
+                CAST(Product_Group AS VARCHAR) AS Product_Group,
+                CAST(Division AS VARCHAR) AS Division,
+                CAST(Dosage_Form AS VARCHAR) AS Dosage_Form,
+                CAST(Strength AS VARCHAR) AS Strength,
+                CAST(Pack_Size AS VARCHAR) AS Pack_Size,
+                CAST(Route_Admin AS VARCHAR) AS Route_Admin,
+                CAST(Indications AS VARCHAR) AS Indications,
+                CAST(Posology AS VARCHAR) AS Posology,
+                CAST(Supplier_1 AS VARCHAR) AS Supplier_1,
+                CAST(Supplier_2 AS VARCHAR) AS Supplier_2,
+                CAST(Supplier_3 AS VARCHAR) AS Supplier_3,
+                CAST(Supplier_4 AS VARCHAR) AS Supplier_4,
+                CAST(Supplier_5 AS VARCHAR) AS Supplier_5,
+                CAST(Primary_Supplier AS VARCHAR) AS Primary_Supplier,
+                CAST(All_Suppliers AS VARCHAR[]) AS All_Suppliers
+            FROM item_temp
+        """)
         
         count = conn.execute("SELECT COUNT(*) FROM item_master").fetchone()[0]
         logger.log_table_info("item_master", count)
@@ -1114,6 +1149,48 @@ def create_master_tables(conn):
         
         logger.log(f"  └─ Supplier Coverage: {supplier_stats[1]:,}/{supplier_stats[0]:,} have primary supplier", "DATA")
         logger.log(f"  └─ Any Supplier: {supplier_stats[2]:,}/{supplier_stats[0]:,}", "DATA")
+        
+    except FileNotFoundError:
+        logger.log("⚠️ Item Master file not found – creating from existing sales/purchase/stock data", "WARNING")
+        conn.execute("DROP TABLE IF EXISTS item_master")
+        conn.execute("""
+            CREATE TABLE item_master (
+                Item_Code VARCHAR,
+                Item_Name VARCHAR,
+                Brand_Name VARCHAR,
+                Product_Group VARCHAR,
+                Division VARCHAR,
+                Dosage_Form VARCHAR,
+                Strength VARCHAR,
+                Pack_Size VARCHAR,
+                Route_Admin VARCHAR,
+                Indications VARCHAR,
+                Posology VARCHAR,
+                Supplier_1 VARCHAR,
+                Supplier_2 VARCHAR,
+                Supplier_3 VARCHAR,
+                Supplier_4 VARCHAR,
+                Supplier_5 VARCHAR,
+                Primary_Supplier VARCHAR,
+                All_Suppliers VARCHAR[]
+            )
+        """)
+        conn.execute("""
+            INSERT INTO item_master (Item_Code, Item_Name)
+            SELECT DISTINCT Item_Code, Item_Name
+            FROM (
+                SELECT Item_Code, Item_Name FROM sales_raw
+                UNION
+                SELECT Item_Code, Item_Name FROM import_purchase
+                UNION
+                SELECT Item_Code, Item_Name FROM local_purchase
+                UNION
+                SELECT Item_Number AS Item_Code, Item_Name FROM stock_data
+            ) AS all_items
+            WHERE Item_Code IS NOT NULL AND Item_Name IS NOT NULL
+        """)
+        count = conn.execute("SELECT COUNT(*) FROM item_master").fetchone()[0]
+        logger.log_table_info("item_master (fallback)", count)
         
     except Exception as e:
         logger.log(f"Error creating item_master: {e}", "ERROR")

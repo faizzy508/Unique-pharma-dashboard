@@ -28,17 +28,17 @@ def run_migration_if_needed():
         os.system(f"{sys.executable} Migration.py")
     else:
         # Check if the main table exists
+        conn = None
         try:
             conn = duckdb.connect(db_path)
             conn.execute("SELECT 1 FROM dashboard_data LIMIT 1")
-            conn.close()
-        except:
+            # Table exists – do nothing
+        except Exception:
             print("⚠️ Main table missing – running Migration.py...")
-            conn.close()
             os.system(f"{sys.executable} Migration.py")
-
-# Call it
-run_migration_if_needed()
+        finally:
+            if conn is not None:
+                conn.close()
 
 
 # ============================================================================

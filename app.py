@@ -56,7 +56,7 @@ def mask_dataframe(df, mask_enabled, columns_to_mask=None):
     return df
 
 # ============================================================================
-# AUTHENTICATION MODULE (Integrated)
+# AUTHENTICATION MODULE (DuckDB-backed)
 # ============================================================================
 
 def hash_password(password: str) -> str:
@@ -108,97 +108,135 @@ DEFAULT_USERS = {
 
 class UserManager:
     def __init__(self):
-        self.users_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.json")
-        self.users = self._load_users()
+        # Use the same database connection as the rest of the app
+        self.conn = get_connection()
+        self._ensure_users_table()
         self._ensure_default_users()
     
-    def _load_users(self) -> dict:
-        if os.path.exists(self.users_file):
-            try:
-                with open(self.users_file, 'r') as f:
-                    return json.load(f)
-            except:
-                return {}
-        return {}
-    
-    def _save_users(self):
-        with open(self.users_file, 'w') as f:
-            json.dump(self.users, f, indent=2)
+    def _ensure_users_table(self):
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                username VARCHAR PRIMARY KEY,
+                password VARCHAR,
+                name VARCHAR,
+                role VARCHAR,
+                email VARCHAR,
+                created TIMESTAMP,
+                last_login TIMESTAMP,
+                active BOOLEAN,
+                permissions VARCHAR[]
+            )
+        """)
     
     def _ensure_default_users(self):
-        changed = False
+        # Check if admin exists; if not, insert defaults
         for username, user_data in DEFAULT_USERS.items():
-            if username not in self.users:
-                self.users[username] = user_data
-                changed = True
-        if changed:
-            self._save_users()
+            exists = self.conn.execute("SELECT 1 FROM users WHERE username = ?", [username]).fetchone()
+            if not exists:
+                self.conn.execute("""
+                    INSERT INTO users (username, password, name, role, email, created, last_login, active, permissions)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, [
+                    username,
+                    user_data['password'],
+                    user_data['name'],
+                    user_data['role'],
+                    user_data['email'],
+                    datetime.now().isoformat() if user_data['created'] == "2026-01-01" else user_data['created'],
+                    user_data['last_login'],
+                    user_data['active'],
+                    user_data['permissions']
+                ])
     
     def authenticate(self, username: str, password: str):
-        if username not in self.users:
+        row = self.conn.execute("SELECT * FROM users WHERE username = ?", [username]).fetchone()
+        if not row:
             return False, None
-        user = self.users[username]
+        # row is a tuple; map by index or use dict
+        user = {
+            'username': row[0],
+            'password': row[1],
+            'name': row[2],
+            'role': row[3],
+            'email': row[4],
+            'created': row[5],
+            'last_login': row[6],
+            'active': row[7],
+            'permissions': row[8]
+        }
         if not user.get('active', True):
             return False, None
-        stored_hash = user.get('password', '')
-        if verify_password(password, stored_hash):
-            user['last_login'] = datetime.now().isoformat()
-            self._save_users()
+        if verify_password(password, user['password']):
+            # Update last_login
+            self.conn.execute("UPDATE users SET last_login = ? WHERE username = ?", [datetime.now().isoformat(), username])
             return True, user
         return False, None
     
     def create_user(self, username: str, password: str, name: str, email: str,
                    role: str = "analyst", permissions: list = None) -> bool:
-        if username in self.users:
-            return False
         if permissions is None:
             permissions = ["view_dashboard"]
-        self.users[username] = {
-            "password": hash_password(password),
-            "name": name,
-            "role": role,
-            "email": email,
-            "created": datetime.now().isoformat(),
-            "last_login": None,
-            "active": True,
-            "permissions": permissions
-        }
-        self._save_users()
+        exists = self.conn.execute("SELECT 1 FROM users WHERE username = ?", [username]).fetchone()
+        if exists:
+            return False
+        self.conn.execute("""
+            INSERT INTO users (username, password, name, role, email, created, last_login, active, permissions)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, [
+            username,
+            hash_password(password),
+            name,
+            role,
+            email,
+            datetime.now().isoformat(),
+            None,
+            True,
+            permissions
+        ])
         return True
     
     def update_user(self, username: str, **kwargs) -> bool:
-        if username not in self.users:
+        exists = self.conn.execute("SELECT 1 FROM users WHERE username = ?", [username]).fetchone()
+        if not exists:
             return False
         for key, value in kwargs.items():
-            if key != 'password' and key != 'username':
-                self.users[username][key] = value
-        if 'password' in kwargs:
-            self.users[username]['password'] = hash_password(kwargs['password'])
-        self._save_users()
+            if key == 'password':
+                self.conn.execute("UPDATE users SET password = ? WHERE username = ?", [hash_password(value), username])
+            elif key == 'active':
+                self.conn.execute("UPDATE users SET active = ? WHERE username = ?", [value, username])
+            elif key == 'name':
+                self.conn.execute("UPDATE users SET name = ? WHERE username = ?", [value, username])
+            elif key == 'email':
+                self.conn.execute("UPDATE users SET email = ? WHERE username = ?", [value, username])
+            elif key == 'role':
+                self.conn.execute("UPDATE users SET role = ? WHERE username = ?", [value, username])
+            elif key == 'permissions':
+                self.conn.execute("UPDATE users SET permissions = ? WHERE username = ?", [value, username])
         return True
     
     def delete_user(self, username: str) -> bool:
         if username == 'admin':
             return False
-        if username in self.users:
-            del self.users[username]
-            self._save_users()
-            return True
-        return False
+        exists = self.conn.execute("SELECT 1 FROM users WHERE username = ?", [username]).fetchone()
+        if not exists:
+            return False
+        self.conn.execute("DELETE FROM users WHERE username = ?", [username])
+        return True
     
     def list_users(self):
-        if not self.users:
+        rows = self.conn.execute("SELECT username, name, role, email, active, last_login, created FROM users ORDER BY username").fetchall()
+        if not rows:
             return pd.DataFrame()
         data = []
-        for username, user in self.users.items():
+        for row in rows:
             data.append({
-                'Username': username,
-                'Name': user.get('name', ''),
-                'Role': user.get('role', ''),
-                'Email': user.get('email', ''),
-                'Active': user.get('active', True),
-                'Last Login': user.get('last_login', 'Never'),
-                'Created': user.get('created', '')
+                'Username': row[0],
+                'Name': row[1],
+                'Role': row[2],
+                'Email': row[3],
+                'Active': "✅ Yes" if row[4] else "❌ No",
+                'Last Login': row[5] if row[5] else 'Never',
+                'Created': row[6]
             })
         return pd.DataFrame(data)
 

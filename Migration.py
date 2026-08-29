@@ -1,3 +1,9 @@
+"""
+PHARMA BI - COMPLETE MIGRATION SCRIPT (FIXED)
+Reads all data files, inserts into DuckDB, and builds all tables.
+Includes Supplier Master, Safety Stock, FOC, and Supplier‑enriched tables.
+"""
+
 import os
 import sys
 import json
@@ -44,7 +50,7 @@ Path(RETURNS_PATH).mkdir(parents=True, exist_ok=True)
 Path(PRF_PO_PATH).mkdir(parents=True, exist_ok=True)
 
 # ============================================================================
-# LOGGING (unchanged)
+# LOGGING
 # ============================================================================
 class AdvancedLogger:
     def __init__(self):
@@ -60,7 +66,7 @@ class AdvancedLogger:
     
     def write_header(self):
         self.log_handle.write("="*100 + "\n")
-        self.log_handle.write("PHARMA BI - COMPLETE MIGRATION LOG (MEMORY OPTIMIZED)\n")
+        self.log_handle.write("PHARMA BI - COMPLETE MIGRATION LOG (FIXED)\n")
         self.log_handle.write(f"Started: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
         self.log_handle.write("="*100 + "\n\n")
     
@@ -159,7 +165,7 @@ class AdvancedLogger:
 logger = AdvancedLogger()
 
 # ============================================================================
-# DATE PARSER (unchanged)
+# DATE PARSER
 # ============================================================================
 class DateParser:
     @staticmethod
@@ -192,23 +198,7 @@ class DateParser:
             return pd.to_datetime(series, errors='coerce')
 
 # ============================================================================
-# MEMORY‑EFFICIENT READ HELPER
-# ============================================================================
-def read_excel_optimized(file_path, usecols=None, dtype=None, sheet_name=0):
-    """
-    Read an Excel file with only needed columns and downcasted dtypes.
-    Returns a DataFrame with reduced memory footprint.
-    """
-    df = pd.read_excel(file_path, sheet_name=sheet_name, usecols=usecols, dtype=dtype)
-    # Downcast numeric columns
-    for col in df.select_dtypes(include=['float']).columns:
-        df[col] = pd.to_numeric(df[col], downcast='float')
-    for col in df.select_dtypes(include=['integer']).columns:
-        df[col] = pd.to_numeric(df[col], downcast='integer')
-    return df
-
-# ============================================================================
-# PURCHASE RETURN PROCESSOR (memory‑optimized)
+# PURCHASE RETURN PROCESSOR (FIXED)
 # ============================================================================
 class PurchaseReturnProcessor:
     def __init__(self):
@@ -224,12 +214,9 @@ class PurchaseReturnProcessor:
         for file in files:
             file_path = os.path.join(self.folder, file)
             try:
-                # Read only needed columns
-                usecols = ['Branch', 'Doc Id.', 'Ref. No.', 'Doc Dt.', 'Vendor Name',
-                           'Item Name', 'Item Code', 'Qty', 'Cost Rate', 'FOC Qty', 'Amount']
-                # Also try alternative names
-                df = read_excel_optimized(file_path, usecols=usecols)
-                # Rename columns (same mapping as before)
+                df = pd.read_excel(file_path)
+                df.columns = [str(c).strip() for c in df.columns.tolist()]
+                
                 rename_map = {
                     'BRANCH': 'Branch', 'Doc Id.': 'Doc_ID', 'Ref. No.': 'Ref_No',
                     'Doc Dt.': 'Purchase_Date', 'Vendor Name': 'Vendor',
@@ -237,8 +224,10 @@ class PurchaseReturnProcessor:
                     'Item Name': 'Item_Name', 'Item Code': 'Item_Code',
                     'Purchaseunit': 'Unit', 'Qty': 'Qty', 'Quantity': 'Qty',
                     'Cost Rate': 'Cost_Rate', 'Unit Price': 'Cost_Rate',
-                    'FOC Qty': 'FOC_Qty', 'Rate-USD': 'Rate_USD', 'Amount-USD': 'Amount_USD',
-                    'Amount': 'Amount_USD', 'Purchase Qty': 'Qty', 'FOC': 'FOC_Qty',
+                    'FOC Qty': 'FOC_Qty', 'Rate-USD': 'Rate_USD',
+                    'Amount-USD': 'Amount_USD', 'Amount_USD': 'Amount_USD',
+                    'Amount': 'Amount_USD',  # fallback
+                    'Purchase Qty': 'Qty', 'FOC': 'FOC_Qty',
                 }
                 for old, new in rename_map.items():
                     if old in df.columns:
@@ -247,13 +236,16 @@ class PurchaseReturnProcessor:
                 keep_cols = ['Branch', 'Doc_ID', 'Ref_No', 'Purchase_Date', 'Vendor',
                              'Item_Name', 'Item_Code', 'Qty', 'Cost_Rate', 'FOC_Qty', 'Amount_USD']
                 df = df[[c for c in keep_cols if c in df.columns]]
+                
                 if 'Purchase_Date' in df.columns:
                     df['Purchase_Date'] = DateParser.parse(df['Purchase_Date'])
+                
                 for col in ['Qty', 'Cost_Rate', 'FOC_Qty', 'Amount_USD']:
                     if col in df.columns:
                         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+                
                 df = df.dropna(subset=['Item_Code', 'Purchase_Date'])
-                # Extract returns (negative values)
+                
                 returns_df = df[(df['Qty'] < 0) | (df['Amount_USD'] < 0) | (df['FOC_Qty'] < 0)].copy()
                 if not returns_df.empty:
                     for col in ['Qty', 'Amount_USD', 'FOC_Qty']:
@@ -262,7 +254,6 @@ class PurchaseReturnProcessor:
                     returns_df['Return_Type'] = 'PURCHASE_RETURN'
                     all_returns.append(returns_df)
                     logger.log(f"  └─ Found {len(returns_df)} return rows in {file}", "WARNING")
-                # Free memory
                 del df, returns_df
                 gc.collect()
             except Exception as e:
@@ -276,7 +267,7 @@ class PurchaseReturnProcessor:
         return None
 
 # ============================================================================
-# LOCAL PURCHASE PROCESSOR (memory‑optimized)
+# LOCAL PURCHASE PROCESSOR (FIXED)
 # ============================================================================
 class LocalPurchaseProcessor:
     def __init__(self):
@@ -292,11 +283,9 @@ class LocalPurchaseProcessor:
         for file in files:
             file_path = os.path.join(self.folder, file)
             try:
-                # Read only needed columns
-                usecols = ['Branch', 'Doc Id.', 'Ref. No.', 'Doc Dt.', 'Vendor Name',
-                           'Item Name', 'Item Code', 'Qty', 'Cost Rate', 'FOC Qty', 'Amount']
-                df = read_excel_optimized(file_path, usecols=usecols)
-                # Rename (same mapping)
+                df = pd.read_excel(file_path)
+                df.columns = [str(c).strip() for c in df.columns.tolist()]
+                
                 rename_map = {
                     'BRANCH': 'Branch', 'Doc Id.': 'Doc_ID', 'Ref. No.': 'Ref_No',
                     'Doc Dt.': 'Purchase_Date', 'Vendor Name': 'Vendor',
@@ -304,8 +293,10 @@ class LocalPurchaseProcessor:
                     'Item Name': 'Item_Name', 'Item Code': 'Item_Code',
                     'Purchaseunit': 'Unit', 'Qty': 'Qty', 'Quantity': 'Qty',
                     'Cost Rate': 'Cost_Rate', 'Unit Price': 'Cost_Rate',
-                    'FOC Qty': 'FOC_Qty', 'Rate-USD': 'Rate_USD', 'Amount-USD': 'Amount_USD',
-                    'Amount': 'Amount_USD', 'Purchase Qty': 'Qty', 'FOC': 'FOC_Qty',
+                    'FOC Qty': 'FOC_Qty', 'Rate-USD': 'Rate_USD',
+                    'Amount-USD': 'Amount_USD', 'Amount_USD': 'Amount_USD',
+                    'Amount': 'Amount_USD',  # fallback
+                    'Purchase Qty': 'Qty', 'FOC': 'FOC_Qty',
                 }
                 for old, new in rename_map.items():
                     if old in df.columns:
@@ -314,14 +305,19 @@ class LocalPurchaseProcessor:
                 keep_cols = ['Branch', 'Doc_ID', 'Ref_No', 'Purchase_Date', 'Vendor',
                              'Item_Name', 'Item_Code', 'Qty', 'Cost_Rate', 'FOC_Qty', 'Amount_USD']
                 df = df[[c for c in keep_cols if c in df.columns]]
+                
                 if 'Purchase_Date' in df.columns:
                     df['Purchase_Date'] = DateParser.parse(df['Purchase_Date'])
+                
                 for col in ['Qty', 'Cost_Rate', 'FOC_Qty', 'Amount_USD']:
                     if col in df.columns:
                         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+                
                 df = df.dropna(subset=['Item_Code', 'Purchase_Date'])
-                # Filter out returns (keep only positive purchases)
+                
+                # Filter out returns
                 df = df[(df['Qty'] >= 0) & (df['Amount_USD'] >= 0) & (df['Cost_Rate'] >= 0)].copy()
+                
                 if not df.empty:
                     all_dfs.append(df)
                     min_date = df['Purchase_Date'].min().strftime('%Y-%m-%d') if not df['Purchase_Date'].isna().all() else 'N/A'
@@ -342,7 +338,7 @@ class LocalPurchaseProcessor:
         return None
 
 # ============================================================================
-# IMPORT PURCHASE PROCESSOR (memory‑optimized)
+# IMPORT PURCHASE PROCESSOR
 # ============================================================================
 class ImportPurchaseProcessor:
     def __init__(self):
@@ -367,17 +363,9 @@ class ImportPurchaseProcessor:
         for file in files:
             file_path = os.path.join(self.folder, file)
             try:
-                # Define needed columns
-                usecols = [
-                    'GRN No', 'GRN Date', 'Item Name (DRC)', 'Item Name (Supplier)',
-                    'Item Code', 'Pack Unit (Sales)', 'Qty', 'FOC', 'Inv No', 'Inv Date',
-                    'Suplier Name', 'Supplier Rate', 'Discount %', 'Rate After Discount',
-                    'Amount', 'BL No', 'BL Date', 'Carrier', 'Transit Time / Shipping Lead Time',
-                    'Invoice-to-Receipt Lead Time', 'BL Lag / Invoice–Shipment Lag',
-                    'Country', 'Location'
-                ]
-                df = read_excel_optimized(file_path, usecols=usecols)
-                # Rename mapping
+                df = pd.read_excel(file_path)
+                df.columns = [str(c).strip() for c in df.columns.tolist()]
+                
                 rename_map = {
                     'GRN No': 'GRN_No', 'GRN Date': 'Purchase_Date',
                     'Item Name (DRC)': 'Item_Name', 'Item Name (Supplier)': 'Item_Name_Supplier',
@@ -413,7 +401,6 @@ class ImportPurchaseProcessor:
                            'Invoice_Receipt_Lead', 'BL_Lag']:
                     if col in df.columns:
                         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-                # Filter out negative values
                 df = df[(df['Qty'] >= 0) & (df['Amount_USD'] >= 0) & (df['Supplier_Rate'] >= 0)].copy()
                 df = df.dropna(subset=['Item_Code', 'Purchase_Date'])
                 if not df.empty:
@@ -436,7 +423,7 @@ class ImportPurchaseProcessor:
         return None
 
 # ============================================================================
-# STOCK FILE PROCESSOR (memory‑optimized)
+# STOCK FILE PROCESSOR
 # ============================================================================
 class StockFileProcessor:
     def __init__(self):
@@ -456,7 +443,6 @@ class StockFileProcessor:
     
     def parse_stock_file(self, file_path, location_name, month_end_date):
         try:
-            # Read only header rows to detect structure (cheap)
             df_raw = pd.read_excel(file_path, sheet_name=0, header=None, nrows=10)
             file_format = self.detect_file_format(df_raw)
             row0 = df_raw.iloc[0].fillna('').astype(str).tolist()
@@ -514,13 +500,7 @@ class StockFileProcessor:
                         branch_pairs[loc_name] = {'stock': stock_col, 'value': None}
                         col_idx += 1
             
-            # Now read the actual data, but only needed columns
-            # We know the column indices from the header, so we can use usecols with column indices
-            # However, we need the actual data rows; we'll read the entire file with header=None
-            # and then skip rows manually. To save memory, we can read the file in chunks,
-            # but stock files are not huge. We'll read the entire file once with optimized types.
             df_full = pd.read_excel(file_path, sheet_name=0, header=None)
-            # Slice rows from data_start_row+1 onward
             data_rows = []
             for i in range(data_start_row + 1, len(df_full)):
                 row = df_full.iloc[i].fillna('').tolist()
@@ -531,7 +511,6 @@ class StockFileProcessor:
             if not data_rows:
                 return None
             
-            # Determine actual number of columns
             actual_cols = len(data_rows[0])
             if len(columns) < actual_cols:
                 extra_cols = actual_cols - len(columns)
@@ -541,18 +520,15 @@ class StockFileProcessor:
                     columns = columns + [f"EXTRA_{i}" for i in range(extra_cols)]
             
             df = pd.DataFrame(data_rows, columns=columns[:actual_cols])
-            # Rename columns
             if 'ITEMNAME' in df.columns:
                 df = df.rename(columns={'ITEMNAME': 'Item_Name'})
             if 'ITEMNUMBER' in df.columns:
                 df = df.rename(columns={'ITEMNUMBER': 'Item_Number'})
             
-            # Convert numeric columns
             for col in df.columns:
                 if col not in ['Item_Name', 'Item_Number']:
                     df[col] = pd.to_numeric(df[col], errors='coerce')
             
-            # Filter out header rows
             if 'Item_Name' in df.columns:
                 df = df[~df['Item_Name'].astype(str).str.upper().isin(['ITEMNAME', 'NAN', '', ' ', 'NONE', 'N/A'])]
                 df = df[df['Item_Name'].astype(str).str.strip() != '']
@@ -602,7 +578,6 @@ class StockFileProcessor:
                 logger.log(f"  └─ Records: {len(df):,}", "DATA")
             else:
                 logger.log(f"  └─ No data loaded", "WARNING")
-            # Free memory
             del df
             gc.collect()
         
@@ -613,7 +588,7 @@ class StockFileProcessor:
         return None
 
 # ============================================================================
-# INCREMENTAL SALES / RETURNS PROCESSOR (memory‑optimized)
+# INCREMENTAL SALES / RETURNS PROCESSOR
 # ============================================================================
 class IncrementalFileProcessor:
     def __init__(self):
@@ -634,7 +609,6 @@ class IncrementalFileProcessor:
         self.sales_folder = SALES_PATH
         self.returns_folder = RETURNS_PATH
 
-        # Create raw tables if not exist
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS sales_raw (
                 Sale_Date DATE, Branch VARCHAR, Item_Code VARCHAR,
@@ -707,12 +681,7 @@ class IncrementalFileProcessor:
             df = None
             for encoding in ['utf-8-sig', 'utf-8', 'latin-1', 'cp1252']:
                 try:
-                    # Read only needed columns to save memory
-                    usecols = ['Branch', 'Inv.No', 'Customer Name', 'Customer Id',
-                               'Item Name', 'Item Code', 'Quantity', 'Free Qty',
-                               'Price', 'Amount(USD)', 'Sales Type', 'Date']
-                    # Try to read with usecols; if columns don't match, fallback to all
-                    df = pd.read_csv(file_path, encoding=encoding, usecols=usecols, low_memory=False)
+                    df = pd.read_csv(file_path, encoding=encoding, low_memory=False)
                     if len(df.columns) > 3:
                         break
                 except:
@@ -720,7 +689,6 @@ class IncrementalFileProcessor:
             if df is None or df.empty:
                 return None
             
-            # Rename and clean (same as original)
             df.columns = [str(c).strip() for c in df.columns.tolist()]
             date_col = None
             for col in df.columns:
@@ -895,7 +863,7 @@ class IncrementalFileProcessor:
         return processed_any
 
 # ============================================================================
-# PRF/PO PROCESSOR (memory‑optimized)
+# PRF/PO PROCESSOR
 # ============================================================================
 class PRFPOProcessor:
     def __init__(self):
@@ -946,7 +914,7 @@ class PRFPOProcessor:
             return None
 
 # ============================================================================
-# SUPPLIER MASTER PROCESSOR (memory‑optimized)
+# SUPPLIER MASTER PROCESSOR
 # ============================================================================
 class SupplierMasterProcessor:
     def __init__(self):
@@ -1020,7 +988,6 @@ class SupplierMasterProcessor:
             if 'Location' in df.columns:
                 df['Location'] = df['Location'].astype(str).str.strip().str.title()
             
-            # Parse Opening_Balance_Date
             if 'Opening_Balance_Date' in df.columns:
                 df['Opening_Balance_Date'] = DateParser.parse(df['Opening_Balance_Date'])
             for col in ['Rate', 'Euro_To_USD_Rate', 'Opening_Balance']:
@@ -1036,20 +1003,14 @@ class SupplierMasterProcessor:
             return None
 
 # ============================================================================
-# MASTER TABLES CREATION (memory‑optimized – uses DuckDB directly)
+# MASTER TABLES CREATION (FIXED – fill nulls)
 # ============================================================================
 def create_master_tables(conn):
     logger.log("📋 Creating item_master with supplier enhancements...", "PROGRESS")
     item_path = ITEM_MASTER_PATH
     try:
-        # Read only needed columns to save memory
-        usecols = ['Item Code', 'Item Name (DRC)', 'Brand Name', 'Product Group',
-                   'Division', 'Dosage Form', 'Strength / Composition', 'Pack Size / Presentation',
-                   'Route of Admin', 'Indications (Summary)', 'Posology / Dosage',
-                   'Supplier Name 1', 'Supplier Name 2', 'Supplier Name 3',
-                   'Supplier Name 4', 'Supplier Name 5']
-        item_df = pd.read_excel(item_path, sheet_name="ITEM MASTER", usecols=usecols)
-        item_df.columns = [str(c).strip() for c in item_df.columns.tolist()]
+        df = pd.read_excel(item_path, sheet_name="ITEM MASTER")
+        df.columns = [str(c).strip() for c in df.columns.tolist()]
         
         rename_map = {
             "Item Code": "Item_Code", "Item Name (DRC)": "Item_Name",
@@ -1065,19 +1026,19 @@ def create_master_tables(conn):
             "Supplier 4": "Supplier_4", "Supplier 5": "Supplier_5",
         }
         for old, new in rename_map.items():
-            if old in item_df.columns:
-                item_df = item_df.rename(columns={old: new})
+            if old in df.columns:
+                df = df.rename(columns={old: new})
         
-        if "Item_Code" in item_df.columns:
-            item_df["Item_Code"] = item_df["Item_Code"].astype(str).str.strip()
-            item_df = item_df[~item_df["Item_Code"].str.lower().isin(['nan', 'none', ''])]
+        if "Item_Code" in df.columns:
+            df["Item_Code"] = df["Item_Code"].astype(str).str.strip()
+            df = df[~df["Item_Code"].str.lower().isin(['nan', 'none', ''])]
         
         supplier_cols = ['Supplier_1', 'Supplier_2', 'Supplier_3', 'Supplier_4', 'Supplier_5']
         for col in supplier_cols:
-            if col in item_df.columns:
-                item_df[col] = item_df[col].fillna('')
-                item_df[col] = item_df[col].astype(str).str.strip()
-                item_df[col] = item_df[col].replace(['', 'nan', 'None', 'NaN', 'none', 'N/A'], None)
+            if col in df.columns:
+                df[col] = df[col].fillna('')
+                df[col] = df[col].astype(str).str.strip()
+                df[col] = df[col].replace(['', 'nan', 'None', 'NaN', 'none', 'N/A'], None)
         
         def get_all_suppliers(row):
             suppliers = []
@@ -1086,8 +1047,8 @@ def create_master_tables(conn):
                     suppliers.append(str(row[col]).strip())
             return suppliers if suppliers else None
         
-        item_df['All_Suppliers'] = item_df.apply(get_all_suppliers, axis=1)
-        item_df['All_Suppliers'] = item_df['All_Suppliers'].apply(
+        df['All_Suppliers'] = df.apply(get_all_suppliers, axis=1)
+        df['All_Suppliers'] = df['All_Suppliers'].apply(
             lambda val: [str(v).strip() for v in val] if isinstance(val, list) else None
         )
         
@@ -1097,16 +1058,35 @@ def create_master_tables(conn):
                     return str(row[col]).strip()
             return None
         
-        item_df['Primary_Supplier'] = item_df.apply(get_primary_supplier, axis=1)
+        df['Primary_Supplier'] = df.apply(get_primary_supplier, axis=1)
         
-        # Fill missing columns with empty strings
+        # --- FIX: fill all string columns with '' and convert to str ---
         for col in ['Item_Name', 'Brand_Name', 'Product_Group', 'Division', 'Dosage_Form',
                     'Strength', 'Pack_Size', 'Route_Admin', 'Indications', 'Posology']:
-            if col not in item_df.columns:
-                item_df[col] = ''
-            item_df[col] = item_df[col].fillna('').astype(str)
+            if col not in df.columns:
+                df[col] = ''
+            df[col] = df[col].fillna('').astype(str)
         
-        conn.register('item_temp', item_df)
+        for col in supplier_cols:
+            if col in df.columns:
+                df[col] = df[col].fillna('').astype(str)
+        
+        if 'Primary_Supplier' in df.columns:
+            df['Primary_Supplier'] = df['Primary_Supplier'].fillna('').astype(str)
+        
+        # Clean All_Suppliers to be a list (not None)
+        def clean_supplier_list(val):
+            if val is None or (isinstance(val, float) and np.isnan(val)):
+                return []
+            if isinstance(val, list):
+                return [str(v).strip() for v in val if v and str(v).strip()]
+            if isinstance(val, str):
+                return [val.strip()] if val.strip() else []
+            return []
+        df['All_Suppliers'] = df['All_Suppliers'].apply(clean_supplier_list)
+        # ----------------------------------------------------------------
+        
+        conn.register('item_temp', df)
         conn.execute("DROP TABLE IF EXISTS item_master")
         conn.execute("""
             CREATE TABLE item_master AS
@@ -1133,7 +1113,7 @@ def create_master_tables(conn):
         """)
         count = conn.execute("SELECT COUNT(*) FROM item_master").fetchone()[0]
         logger.log_table_info("item_master", count)
-        del item_df
+        del df
         gc.collect()
         
     except FileNotFoundError:
@@ -1212,8 +1192,10 @@ def create_master_tables(conn):
         traceback.print_exc()
         conn.execute("CREATE TABLE IF NOT EXISTS location_master (Branch VARCHAR, Location VARCHAR)")
 
+# ============================================================================
+# AGGREGATED TABLES (unchanged)
+# ============================================================================
 def rebuild_aggregated_tables(conn):
-    """Rebuild aggregated_sales, aggregated_returns from raw data."""
     logger.log("🔄 Rebuilding aggregated tables from raw data...", "PROGRESS")
     
     conn.execute("DROP TABLE IF EXISTS aggregated_sales")
@@ -1258,7 +1240,6 @@ def rebuild_aggregated_tables(conn):
     logger.log_table_info("aggregated_returns", count)
     
     logger.log("📊 Creating materialized dashboard_data table...", "PROGRESS")
-    
     try:
         conn.execute("DROP TABLE IF EXISTS dashboard_data")
     except:
@@ -1303,8 +1284,10 @@ def rebuild_aggregated_tables(conn):
     count = conn.execute("SELECT COUNT(*) FROM dashboard_data").fetchone()[0]
     logger.log_table_info("dashboard_data", count)
 
+# ============================================================================
+# PRE-AGGREGATED SUMMARIES (unchanged)
+# ============================================================================
 def create_pre_aggregated_summaries(conn):
-    """Create pre-aggregated summary tables for instant loading."""
     logger.log("📊 Creating pre-aggregated summary tables...", "PROGRESS")
     
     conn.execute("DROP TABLE IF EXISTS branch_monthly_summary")
@@ -1414,8 +1397,10 @@ def create_pre_aggregated_summaries(conn):
     count = conn.execute("SELECT COUNT(*) FROM division_monthly_summary").fetchone()[0]
     logger.log_table_info("division_monthly_summary", count)
 
+# ============================================================================
+# INSTANT FILTER TABLES (unchanged)
+# ============================================================================
 def create_instant_filter_tables(conn):
-    """Create pre-aggregated tables for instant filtering."""
     logger.log("📊 Creating INSTANT FILTER TABLES...", "PROGRESS")
     
     try:
@@ -1468,8 +1453,10 @@ def create_instant_filter_tables(conn):
         logger.log(f"  ❌ Failed to create branch_item_summary: {e}", "ERROR")
         traceback.print_exc()
 
+# ============================================================================
+# BRANCH-ITEM MONTHLY SUMMARY (unchanged)
+# ============================================================================
 def create_branch_item_monthly_summary(conn):
-    """Create detailed monthly summary per branch, location, and item."""
     logger.log("📊 Creating branch_item_monthly_summary...", "PROGRESS")
     try:
         conn.execute("DROP TABLE IF EXISTS branch_item_monthly_summary")
@@ -1497,8 +1484,10 @@ def create_branch_item_monthly_summary(conn):
         logger.log(f"  ❌ Failed to create branch_item_monthly_summary: {e}", "ERROR")
         traceback.print_exc()
 
+# ============================================================================
+# DECISION SUPPORT TABLES (unchanged)
+# ============================================================================
 def create_decision_support_tables(conn):
-    """Create tables for advanced decision making."""
     logger.log("📊 Creating decision support tables...", "PROGRESS")
     
     try:
@@ -1625,8 +1614,10 @@ def create_decision_support_tables(conn):
         logger.log(f"  ❌ Failed to create division_performance: {e}", "ERROR")
         traceback.print_exc()
 
+# ============================================================================
+# PIVOT TABLES (unchanged)
+# ============================================================================
 def create_all_pivot_tables(conn):
-    """Create ALL pivot tables for Sales, Returns, and Net Sales."""
     logger.log("📊 Creating ALL pivot tables...", "PROGRESS")
     
     pivot_configs = [
@@ -1834,8 +1825,10 @@ def create_all_pivot_tables(conn):
     count = conn.execute("SELECT COUNT(*) FROM yearly_summary").fetchone()[0]
     logger.log_table_info("yearly_summary", count)
 
+# ============================================================================
+# DEMAND PLANNING TABLES (unchanged)
+# ============================================================================
 def create_demand_planning_tables(conn):
-    """Create all demand planning and forecasting tables."""
     logger.log("📊 Creating DEMAND PLANNING tables...", "PROGRESS")
     
     conn.execute("DROP TABLE IF EXISTS monthly_demand")
@@ -2058,8 +2051,10 @@ def create_demand_planning_tables(conn):
     count = conn.execute("SELECT COUNT(*) FROM forecast_summary").fetchone()[0]
     logger.log_table_info("forecast_summary", count)
 
+# ============================================================================
+# STOCK TABLES (unchanged)
+# ============================================================================
 def create_stock_tables(conn, stock_df):
-    """Create all stock-related tables."""
     if stock_df is None or stock_df.empty:
         logger.log("No stock data available", "WARNING")
         return
@@ -2285,8 +2280,10 @@ def create_stock_tables(conn, stock_df):
     count = conn.execute("SELECT COUNT(*) FROM stock_vs_sales").fetchone()[0]
     logger.log_table_info("stock_vs_sales (view)", count)
 
+# ============================================================================
+# STOCK HEALTH DASHBOARD (unchanged)
+# ============================================================================
 def create_stock_health_dashboard(conn):
-    """Create stock_health_dashboard table."""
     logger.log("📊 Creating stock_health_dashboard...", "PROGRESS")
     try:
         conn.execute("DROP TABLE IF EXISTS stock_health_dashboard")
@@ -2331,8 +2328,10 @@ def create_stock_health_dashboard(conn):
         logger.log(f"  ❌ Failed to create stock_health_dashboard: {e}", "ERROR")
         traceback.print_exc()
 
+# ============================================================================
+# BRANCH-ITEM MONTHLY ANALYSIS (unchanged)
+# ============================================================================
 def create_branch_item_monthly_analysis(conn):
-    """Create branch_item_monthly_analysis table."""
     logger.log("📊 Creating branch_item_monthly_analysis...", "PROGRESS")
     try:
         conn.execute("DROP TABLE IF EXISTS branch_item_monthly_analysis")
@@ -2374,8 +2373,10 @@ def create_branch_item_monthly_analysis(conn):
         logger.log(f"  ❌ Failed to create branch_item_monthly_analysis: {e}", "ERROR")
         traceback.print_exc()
 
+# ============================================================================
+# CURRENT STOCK RECOMMENDATIONS (unchanged)
+# ============================================================================
 def create_current_stock_recommendations(conn):
-    """Create current_stock_recommendations table."""
     logger.log("📊 Creating current_stock_recommendations...", "PROGRESS")
     try:
         latest_date = conn.execute("SELECT MAX(Month_End_Date) FROM stock_unpivoted").fetchone()[0]
@@ -2438,8 +2439,10 @@ def create_current_stock_recommendations(conn):
         logger.log(f"  ❌ Failed to create current_stock_recommendations: {e}", "ERROR")
         traceback.print_exc()
 
+# ============================================================================
+# STOCK STATUS SUMMARY (unchanged)
+# ============================================================================
 def create_stock_status_summary(conn):
-    """Create stock_status_summary table."""
     logger.log("📊 Creating stock_status_summary...", "PROGRESS")
     try:
         latest_date = conn.execute("SELECT MAX(Month_End_Date) FROM stock_unpivoted").fetchone()[0]
@@ -2491,8 +2494,10 @@ def create_stock_status_summary(conn):
         logger.log(f"  ❌ Failed to create stock_status_summary: {e}", "ERROR")
         traceback.print_exc()
 
+# ============================================================================
+# MONTHLY STOCK (unchanged)
+# ============================================================================
 def create_monthly_stock(conn):
-    """Create monthly_stock table."""
     logger.log("📊 Creating monthly_stock table...", "PROGRESS")
     conn.execute("DROP TABLE IF EXISTS monthly_stock")
     conn.execute("""
@@ -2517,8 +2522,10 @@ def create_monthly_stock(conn):
     count = conn.execute("SELECT COUNT(*) FROM monthly_stock").fetchone()[0]
     logger.log_table_info("monthly_stock", count)
 
+# ============================================================================
+# PURCHASE RETURNS TABLE (unchanged)
+# ============================================================================
 def create_purchase_returns_table(conn, returns_df):
-    """Create purchase_returns table from extracted returns data."""
     if returns_df is None or returns_df.empty:
         logger.log("No purchase returns data available", "INFO")
         conn.execute("""
@@ -2568,11 +2575,12 @@ def create_purchase_returns_table(conn, returns_df):
     count = conn.execute("SELECT COUNT(*) FROM purchase_returns").fetchone()[0]
     logger.log_table_info("purchase_returns", count)
 
+# ============================================================================
+# PURCHASE TABLES (unchanged)
+# ============================================================================
 def create_purchase_tables(conn, local_df, import_df, returns_df):
-    """Create all purchase-related tables and views."""
     logger.log("📊 Creating PURCHASE tables...", "PROGRESS")
     
-    # Store local_purchase (clean, without returns)
     if local_df is not None and not local_df.empty:
         conn.register('local_purchase_temp', local_df)
         conn.execute("DROP TABLE IF EXISTS local_purchase")
@@ -2589,10 +2597,8 @@ def create_purchase_tables(conn, local_df, import_df, returns_df):
         """)
         logger.log_table_info("local_purchase", 0)
     
-    # Store purchase_returns
     create_purchase_returns_table(conn, returns_df)
     
-    # Store import_purchase
     if import_df is not None and not import_df.empty:
         conn.register('import_purchase_temp', import_df)
         conn.execute("DROP TABLE IF EXISTS import_purchase")
@@ -2612,7 +2618,6 @@ def create_purchase_tables(conn, local_df, import_df, returns_df):
         """)
         logger.log_table_info("import_purchase", 0)
     
-    # Create purchase_all_clean view (excludes returns)
     conn.execute("DROP VIEW IF EXISTS purchase_all_clean")
     conn.execute("""
         CREATE VIEW purchase_all_clean AS
@@ -2655,7 +2660,6 @@ def create_purchase_tables(conn, local_df, import_df, returns_df):
     count = conn.execute("SELECT COUNT(*) FROM purchase_all_clean").fetchone()[0]
     logger.log_table_info("purchase_all_clean (view)", count)
     
-    # Original purchase_all view (kept for backward compatibility)
     conn.execute("DROP VIEW IF EXISTS purchase_all")
     conn.execute("""
         CREATE VIEW purchase_all AS
@@ -2696,7 +2700,6 @@ def create_purchase_tables(conn, local_df, import_df, returns_df):
     count = conn.execute("SELECT COUNT(*) FROM purchase_all").fetchone()[0]
     logger.log_table_info("purchase_all (view)", count)
     
-    # Update purchase_by_item to use clean data
     conn.execute("DROP VIEW IF EXISTS purchase_by_item")
     conn.execute("""
         CREATE VIEW purchase_by_item AS
@@ -2715,7 +2718,6 @@ def create_purchase_tables(conn, local_df, import_df, returns_df):
     count = conn.execute("SELECT COUNT(*) FROM purchase_by_item").fetchone()[0]
     logger.log_table_info("purchase_by_item (view)", count)
     
-    # Update purchase_by_vendor to use clean data
     conn.execute("DROP VIEW IF EXISTS purchase_by_vendor")
     conn.execute("""
         CREATE VIEW purchase_by_vendor AS
@@ -2735,7 +2737,6 @@ def create_purchase_tables(conn, local_df, import_df, returns_df):
     count = conn.execute("SELECT COUNT(*) FROM purchase_by_vendor").fetchone()[0]
     logger.log_table_info("purchase_by_vendor (view)", count)
     
-    # Update purchase_by_branch to use clean data
     conn.execute("DROP VIEW IF EXISTS purchase_by_branch")
     conn.execute("""
         CREATE VIEW purchase_by_branch AS
@@ -2753,7 +2754,6 @@ def create_purchase_tables(conn, local_df, import_df, returns_df):
     count = conn.execute("SELECT COUNT(*) FROM purchase_by_branch").fetchone()[0]
     logger.log_table_info("purchase_by_branch (view)", count)
     
-    # Update purchase_trend to use clean data
     conn.execute("DROP VIEW IF EXISTS purchase_trend")
     conn.execute("""
         CREATE VIEW purchase_trend AS
@@ -2774,7 +2774,6 @@ def create_purchase_tables(conn, local_df, import_df, returns_df):
     count = conn.execute("SELECT COUNT(*) FROM purchase_trend").fetchone()[0]
     logger.log_table_info("purchase_trend (view)", count)
     
-    # avg_purchase_price view
     conn.execute("DROP VIEW IF EXISTS avg_purchase_price")
     conn.execute("""
         CREATE VIEW avg_purchase_price AS
@@ -2789,7 +2788,6 @@ def create_purchase_tables(conn, local_df, import_df, returns_df):
     count = conn.execute("SELECT COUNT(*) FROM avg_purchase_price").fetchone()[0]
     logger.log_table_info("avg_purchase_price (view)", count)
     
-    # purchase_summary view
     conn.execute("DROP VIEW IF EXISTS purchase_summary")
     conn.execute("""
         CREATE VIEW purchase_summary AS
@@ -2816,7 +2814,6 @@ def create_purchase_tables(conn, local_df, import_df, returns_df):
     count = conn.execute("SELECT COUNT(*) FROM purchase_summary").fetchone()[0]
     logger.log_table_info("purchase_summary (view)", count)
     
-    # purchase_vs_sales view
     conn.execute("DROP VIEW IF EXISTS purchase_vs_sales")
     conn.execute("""
         CREATE VIEW purchase_vs_sales AS
@@ -2866,8 +2863,10 @@ def create_purchase_tables(conn, local_df, import_df, returns_df):
     count = conn.execute("SELECT COUNT(*) FROM purchase_vs_sales").fetchone()[0]
     logger.log_table_info("purchase_vs_sales (view)", count)
 
+# ============================================================================
+# PRF/PO TABLES (unchanged)
+# ============================================================================
 def create_prf_po_tables(conn, prf_df):
-    """Create tables from PRF/PO data."""
     if prf_df is None or prf_df.empty:
         logger.log("No PRF/PO data available", "WARNING")
         return
@@ -2944,11 +2943,9 @@ def create_prf_po_tables(conn, prf_df):
     logger.log_table_info("supplier_lead_time_performance (view)", count)
 
 # ============================================================================
-# SUPPLIER MASTER TABLES
+# SUPPLIER MASTER TABLES (unchanged)
 # ============================================================================
-
 def create_supplier_master_tables(conn, supplier_df):
-    """Create supplier_master table from Supplier Master file."""
     if supplier_df is None or supplier_df.empty:
         logger.log("No Supplier Master data available", "WARNING")
         conn.execute("""
@@ -2974,17 +2971,6 @@ def create_supplier_master_tables(conn, supplier_df):
     
     logger.log("📊 Creating supplier_master table...", "PROGRESS")
     
-    # Parse Opening_Balance_Date
-    if 'Opening_Balance_Date' in supplier_df.columns:
-        supplier_df['Opening_Balance_Date'] = DateParser.parse(supplier_df['Opening_Balance_Date'])
-    
-    # Handle numeric columns
-    for col in ['Rate', 'Euro_To_USD_Rate', 'Opening_Balance', 'Lead_Time']:
-        if col in supplier_df.columns:
-            supplier_df[col] = pd.to_numeric(supplier_df[col], errors='coerce')
-            supplier_df[col] = supplier_df[col].fillna(0)
-    
-    # Register and create table
     conn.register('supplier_master_temp', supplier_df)
     conn.execute("DROP TABLE IF EXISTS supplier_master")
     conn.execute("CREATE TABLE supplier_master AS SELECT * FROM supplier_master_temp")
@@ -2992,7 +2978,6 @@ def create_supplier_master_tables(conn, supplier_df):
     count = conn.execute("SELECT COUNT(*) FROM supplier_master").fetchone()[0]
     logger.log_table_info("supplier_master", count)
     
-    # Log lead time summary
     lead_summary = conn.execute("""
         SELECT 
             AVG(Lead_Time) as Avg_Lead_Time,
@@ -3009,18 +2994,18 @@ def create_supplier_master_tables(conn, supplier_df):
     logger.log(f"     - Max Lead Time: {lead_summary[2]:.0f} days", "DATA")
     logger.log(f"     - Suppliers with Lead Time: {lead_summary[4]:,}/{lead_summary[3]:,}", "DATA")
 
+# ============================================================================
+# SAFETY STOCK TABLES (unchanged)
+# ============================================================================
 def create_safety_stock_tables(conn):
-    """Create safety stock tables based on supplier lead time."""
     logger.log("🛡️ Creating SAFETY STOCK tables...", "PROGRESS")
     
-    # Check if item_demand exists
     try:
         conn.execute("SELECT COUNT(*) FROM item_demand").fetchone()
     except:
         logger.log("  ⚠️ item_demand table not found, skipping safety stock tables", "WARNING")
         return
     
-    # 1. safety_stock_by_supplier
     conn.execute("DROP TABLE IF EXISTS safety_stock_by_supplier")
     conn.execute("""
         CREATE TABLE safety_stock_by_supplier AS
@@ -3042,7 +3027,6 @@ def create_safety_stock_tables(conn):
                 s.Lead_Time,
                 s.Total_Qty,
                 s.Unique_Products,
-                -- For suppliers, average across products
                 s.Total_Qty / NULLIF(s.Unique_Products, 0) / 30 as Avg_Daily_Demand_Qty,
                 s.Total_Sales / NULLIF(s.Unique_Products, 0) / 30 as Avg_Daily_Demand_Value,
                 CASE 
@@ -3079,7 +3063,6 @@ def create_safety_stock_tables(conn):
     count = conn.execute("SELECT COUNT(*) FROM safety_stock_by_supplier").fetchone()[0]
     logger.log_table_info("safety_stock_by_supplier", count)
     
-    # 2. safety_stock_by_item - FIXED: Minimum 3 months threshold
     conn.execute("DROP TABLE IF EXISTS safety_stock_by_item")
     conn.execute("""
         CREATE TABLE safety_stock_by_item AS
@@ -3095,11 +3078,8 @@ def create_safety_stock_tables(conn):
                 im.Primary_Supplier,
                 sm.Lead_Time,
                 sm.Location as Supplier_Location,
-                -- FIXED: Use different calculation based on Active Months
                 CASE 
-                    -- For items with 3+ months, use monthly average / 30
                     WHEN id.Active_Months >= 3 THEN id.Total_Qty / NULLIF(id.Active_Months, 0) / 30
-                    -- For items with < 3 months, use annual average (conservative)
                     ELSE id.Total_Qty / NULLIF(365, 0)
                 END as Avg_Daily_Demand_Qty,
                 CASE 
@@ -3139,7 +3119,7 @@ def create_safety_stock_tables(conn):
             Avg_Daily_Demand_Qty,
             Avg_Daily_Demand_Value,
             Demand_Stability_Index,
-            Active_Months,  -- Added for visibility
+            Active_Months,
             Lead_Time_Factor,
             Variability_Factor,
             ROUND(Avg_Daily_Demand_Qty * COALESCE(Lead_Time, 180) * Lead_Time_Factor * Variability_Factor, 0) as Safety_Stock_Qty,
@@ -3167,7 +3147,6 @@ def create_safety_stock_tables(conn):
     count = conn.execute("SELECT COUNT(*) FROM safety_stock_by_item").fetchone()[0]
     logger.log_table_info("safety_stock_by_item", count)
     
-    # 3. Update safety_stock_by_item with current stock
     try:
         conn.execute("""
             UPDATE safety_stock_by_item
@@ -3189,7 +3168,6 @@ def create_safety_stock_tables(conn):
     except Exception as e:
         logger.log(f"  └─ Could not update current stock: {e}", "WARNING")
     
-    # 4. safety_stock_summary
     conn.execute("DROP TABLE IF EXISTS safety_stock_summary")
     conn.execute("""
         CREATE TABLE safety_stock_summary AS
@@ -3230,14 +3208,11 @@ def create_safety_stock_tables(conn):
     logger.log_table_info("safety_stock_summary", count)
 
 # ============================================================================
-# FOC TABLES
+# FOC TABLES (unchanged)
 # ============================================================================
-
 def create_foc_tables(conn):
-    """Create FOC-related tables for sales and purchase FOC analysis."""
     logger.log("🎯 Creating FOC tables...", "PROGRESS")
     
-    # 1. Sales FOC Summary by Item
     conn.execute("DROP TABLE IF EXISTS foc_sales_summary")
     conn.execute("""
         CREATE TABLE foc_sales_summary AS
@@ -3265,7 +3240,6 @@ def create_foc_tables(conn):
     count = conn.execute("SELECT COUNT(*) FROM foc_sales_summary").fetchone()[0]
     logger.log_table_info("foc_sales_summary", count)
     
-    # 2. Sales FOC Monthly Trend
     conn.execute("DROP TABLE IF EXISTS foc_sales_monthly")
     conn.execute("""
         CREATE TABLE foc_sales_monthly AS
@@ -3296,7 +3270,6 @@ def create_foc_tables(conn):
     count = conn.execute("SELECT COUNT(*) FROM foc_sales_monthly").fetchone()[0]
     logger.log_table_info("foc_sales_monthly", count)
     
-    # 3. FOC Adjusted Demand View
     conn.execute("DROP VIEW IF EXISTS foc_adjusted_demand")
     conn.execute("""
         CREATE VIEW foc_adjusted_demand AS
@@ -3322,7 +3295,6 @@ def create_foc_tables(conn):
     count = conn.execute("SELECT COUNT(*) FROM foc_adjusted_demand").fetchone()[0]
     logger.log_table_info("foc_adjusted_demand (view)", count)
     
-    # 4. Purchase FOC Summary
     conn.execute("DROP TABLE IF EXISTS foc_purchase_summary")
     conn.execute("""
         CREATE TABLE foc_purchase_summary AS
@@ -3369,7 +3341,6 @@ def create_foc_tables(conn):
     count = conn.execute("SELECT COUNT(*) FROM foc_purchase_summary").fetchone()[0]
     logger.log_table_info("foc_purchase_summary", count)
     
-    # 5. Purchase FOC Monthly Trend
     conn.execute("DROP TABLE IF EXISTS foc_purchase_monthly")
     conn.execute("""
         CREATE TABLE foc_purchase_monthly AS
@@ -3418,7 +3389,6 @@ def create_foc_tables(conn):
     count = conn.execute("SELECT COUNT(*) FROM foc_purchase_monthly").fetchone()[0]
     logger.log_table_info("foc_purchase_monthly", count)
     
-    # 6. FOC Outliers (Sales)
     conn.execute("DROP TABLE IF EXISTS foc_sales_outliers")
     conn.execute("""
         CREATE TABLE foc_sales_outliers AS
@@ -3454,7 +3424,6 @@ def create_foc_tables(conn):
     count = conn.execute("SELECT COUNT(*) FROM foc_sales_outliers").fetchone()[0]
     logger.log_table_info("foc_sales_outliers", count)
     
-    # 7. FOC Purchase Outliers
     conn.execute("DROP TABLE IF EXISTS foc_purchase_outliers")
     conn.execute("""
         CREATE TABLE foc_purchase_outliers AS
@@ -3491,7 +3460,6 @@ def create_foc_tables(conn):
     count = conn.execute("SELECT COUNT(*) FROM foc_purchase_outliers").fetchone()[0]
     logger.log_table_info("foc_purchase_outliers", count)
     
-    # 8. FOC Recommendations View
     conn.execute("DROP VIEW IF EXISTS foc_recommendations")
     conn.execute("""
         CREATE VIEW foc_recommendations AS
@@ -3535,7 +3503,6 @@ def create_foc_tables(conn):
     count = conn.execute("SELECT COUNT(*) FROM foc_recommendations").fetchone()[0]
     logger.log_table_info("foc_recommendations (view)", count)
     
-    # 9. FOC Impact on Demand
     conn.execute("DROP TABLE IF EXISTS foc_demand_impact")
     conn.execute("""
         CREATE TABLE foc_demand_impact AS
@@ -3561,7 +3528,6 @@ def create_foc_tables(conn):
     count = conn.execute("SELECT COUNT(*) FROM foc_demand_impact").fetchone()[0]
     logger.log_table_info("foc_demand_impact", count)
     
-    # 10. FOC by Branch Summary
     conn.execute("DROP TABLE IF EXISTS foc_sales_by_branch")
     conn.execute("""
         CREATE TABLE foc_sales_by_branch AS
@@ -3585,7 +3551,6 @@ def create_foc_tables(conn):
     count = conn.execute("SELECT COUNT(*) FROM foc_sales_by_branch").fetchone()[0]
     logger.log_table_info("foc_sales_by_branch", count)
     
-    # 11. FOC by Product Group
     conn.execute("DROP TABLE IF EXISTS foc_sales_by_group")
     conn.execute("""
         CREATE TABLE foc_sales_by_group AS
@@ -3612,16 +3577,12 @@ def create_foc_tables(conn):
     logger.log("✅ FOC tables created successfully!", "SUCCESS")
 
 # ============================================================================
-# SUPPLIER ENHANCEMENT TABLES
+# SUPPLIER-ENRICHED TABLES (unchanged)
 # ============================================================================
-
 def create_supplier_enriched_tables(conn):
-    """Create supplier-enriched tables."""
     logger.log("🏢 Creating SUPPLIER-ENRICHED tables...", "PROGRESS")
     
-    # 1. supplier_product_mapping
     logger.log("  └─ Creating supplier_product_mapping...", "PROGRESS")
-    
     conn.execute("DROP TABLE IF EXISTS supplier_product_mapping")
     conn.execute("""
         CREATE TABLE supplier_product_mapping AS
@@ -3683,13 +3644,10 @@ def create_supplier_enriched_tables(conn):
         GROUP BY Item_Code, Item_Name, Product_Group, Division, Brand_Name, Supplier
         ORDER BY Item_Code, Supplier
     """)
-    
     count = conn.execute("SELECT COUNT(*) FROM supplier_product_mapping").fetchone()[0]
     logger.log_table_info("supplier_product_mapping", count)
     
-    # 2. item_supplier_summary
     logger.log("  └─ Creating item_supplier_summary...", "PROGRESS")
-    
     conn.execute("DROP TABLE IF EXISTS item_supplier_summary")
     conn.execute("""
         CREATE TABLE item_supplier_summary AS
@@ -3712,13 +3670,10 @@ def create_supplier_enriched_tables(conn):
         GROUP BY Item_Code, Item_Name, Product_Group, Division, Brand_Name
         ORDER BY Total_Suppliers DESC
     """)
-    
     count = conn.execute("SELECT COUNT(*) FROM item_supplier_summary").fetchone()[0]
     logger.log_table_info("item_supplier_summary", count)
     
-    # 3. supplier_product_performance
     logger.log("  └─ Creating supplier_product_performance...", "PROGRESS")
-    
     conn.execute("DROP TABLE IF EXISTS supplier_product_performance")
     conn.execute("""
         CREATE TABLE supplier_product_performance AS
@@ -3745,13 +3700,10 @@ def create_supplier_enriched_tables(conn):
         LEFT JOIN purchase_by_item pb ON spm.Item_Code = pb.Item_Code
         ORDER BY spm.Supplier, Total_Sales DESC
     """)
-    
     count = conn.execute("SELECT COUNT(*) FROM supplier_product_performance").fetchone()[0]
     logger.log_table_info("supplier_product_performance", count)
     
-    # 4. supplier_summary
     logger.log("  └─ Creating supplier_summary...", "PROGRESS")
-    
     conn.execute("DROP TABLE IF EXISTS supplier_summary")
     conn.execute("""
         CREATE TABLE supplier_summary AS
@@ -3771,13 +3723,10 @@ def create_supplier_enriched_tables(conn):
         GROUP BY Supplier
         ORDER BY Total_Purchase_Spend DESC
     """)
-    
     count = conn.execute("SELECT COUNT(*) FROM supplier_summary").fetchone()[0]
     logger.log_table_info("supplier_summary", count)
     
-    # 5. supplier_purchase_detail
     logger.log("  └─ Creating supplier_purchase_detail...", "PROGRESS")
-    
     conn.execute("DROP TABLE IF EXISTS supplier_purchase_detail")
     conn.execute("""
         CREATE TABLE supplier_purchase_detail AS
@@ -3800,13 +3749,10 @@ def create_supplier_enriched_tables(conn):
         LEFT JOIN item_master im ON UPPER(p.Item_Code) = UPPER(im.Item_Code)
         ORDER BY p.Vendor, p.Purchase_Date DESC
     """)
-    
     count = conn.execute("SELECT COUNT(*) FROM supplier_purchase_detail").fetchone()[0]
     logger.log_table_info("supplier_purchase_detail", count)
     
-    # 6. supplier_purchase_summary
     logger.log("  └─ Creating supplier_purchase_summary...", "PROGRESS")
-    
     conn.execute("DROP TABLE IF EXISTS supplier_purchase_summary")
     conn.execute("""
         CREATE TABLE supplier_purchase_summary AS
@@ -3825,13 +3771,10 @@ def create_supplier_enriched_tables(conn):
         GROUP BY Supplier
         ORDER BY Total_Purchase_Amount DESC
     """)
-    
     count = conn.execute("SELECT COUNT(*) FROM supplier_purchase_summary").fetchone()[0]
     logger.log_table_info("supplier_purchase_summary", count)
     
-    # 7. supplier_purchase_by_item
     logger.log("  └─ Creating supplier_purchase_by_item...", "PROGRESS")
-    
     conn.execute("DROP TABLE IF EXISTS supplier_purchase_by_item")
     conn.execute("""
         CREATE TABLE supplier_purchase_by_item AS
@@ -3853,13 +3796,10 @@ def create_supplier_enriched_tables(conn):
         GROUP BY Supplier, Item_Code, Item_Name, Product_Group, Division, Brand_Name
         ORDER BY Supplier, Total_Purchase_Amount DESC
     """)
-    
     count = conn.execute("SELECT COUNT(*) FROM supplier_purchase_by_item").fetchone()[0]
     logger.log_table_info("supplier_purchase_by_item", count)
     
-    # 8. supplier_purchase_monthly
     logger.log("  └─ Creating supplier_purchase_monthly...", "PROGRESS")
-    
     conn.execute("DROP TABLE IF EXISTS supplier_purchase_monthly")
     conn.execute("""
         CREATE TABLE supplier_purchase_monthly AS
@@ -3876,13 +3816,10 @@ def create_supplier_enriched_tables(conn):
         GROUP BY Supplier, STRFTIME(Purchase_Date, '%Y-%m'), EXTRACT(YEAR FROM Purchase_Date), EXTRACT(MONTH FROM Purchase_Date)
         ORDER BY Supplier, Year, Month_Num
     """)
-    
     count = conn.execute("SELECT COUNT(*) FROM supplier_purchase_monthly").fetchone()[0]
     logger.log_table_info("supplier_purchase_monthly", count)
     
-    # 9. supplier_purchase_top_items
     logger.log("  └─ Creating supplier_purchase_top_items...", "PROGRESS")
-    
     conn.execute("DROP TABLE IF EXISTS supplier_purchase_top_items")
     conn.execute("""
         CREATE TABLE supplier_purchase_top_items AS
@@ -3900,13 +3837,10 @@ def create_supplier_enriched_tables(conn):
         FROM supplier_purchase_by_item
         ORDER BY Supplier, Rank_By_Amount
     """)
-    
     count = conn.execute("SELECT COUNT(*) FROM supplier_purchase_top_items").fetchone()[0]
     logger.log_table_info("supplier_purchase_top_items", count)
     
-    # 10. demand_plan_with_suppliers
     logger.log("  └─ Creating demand_plan_with_suppliers...", "PROGRESS")
-    
     conn.execute("DROP TABLE IF EXISTS demand_plan_with_suppliers")
     conn.execute("""
         CREATE TABLE demand_plan_with_suppliers AS
@@ -3951,13 +3885,10 @@ def create_supplier_enriched_tables(conn):
             (SELECT Supplier FROM supplier_product_mapping WHERE Item_Code = d.Item_Code LIMIT 1)) = s.Supplier
         ORDER BY d.Total_Revenue DESC
     """)
-    
     count = conn.execute("SELECT COUNT(*) FROM demand_plan_with_suppliers").fetchone()[0]
     logger.log_table_info("demand_plan_with_suppliers", count)
     
-    # 11. supplier_demand_forecast
     logger.log("  └─ Creating supplier_demand_forecast...", "PROGRESS")
-    
     conn.execute("DROP TABLE IF EXISTS supplier_demand_forecast")
     conn.execute("""
         CREATE TABLE supplier_demand_forecast AS
@@ -3980,13 +3911,10 @@ def create_supplier_enriched_tables(conn):
         GROUP BY spp.Supplier
         ORDER BY Supplier_Total_Purchase DESC
     """)
-    
     count = conn.execute("SELECT COUNT(*) FROM supplier_demand_forecast").fetchone()[0]
     logger.log_table_info("supplier_demand_forecast", count)
     
-    # 12. supplier_risk_analysis
     logger.log("  └─ Creating supplier_risk_analysis...", "PROGRESS")
-    
     conn.execute("DROP TABLE IF EXISTS supplier_risk_analysis")
     conn.execute("""
         CREATE TABLE supplier_risk_analysis AS
@@ -4041,13 +3969,10 @@ def create_supplier_enriched_tables(conn):
         FROM supplier_metrics
         ORDER BY Total_Purchase_Spend DESC
     """)
-    
     count = conn.execute("SELECT COUNT(*) FROM supplier_risk_analysis").fetchone()[0]
     logger.log_table_info("supplier_risk_analysis", count)
 
-    # 13. supplier_product_demand
     logger.log("  └─ Creating supplier_product_demand...", "PROGRESS")
-    
     conn.execute("DROP TABLE IF EXISTS supplier_product_demand")
     conn.execute("""
         CREATE TABLE supplier_product_demand AS
@@ -4085,11 +4010,9 @@ def create_supplier_enriched_tables(conn):
         LEFT JOIN purchase_by_item pb ON spm.Item_Code = pb.Item_Code
         ORDER BY spm.Supplier, d.Total_Revenue DESC
     """)
-    
     count = conn.execute("SELECT COUNT(*) FROM supplier_product_demand").fetchone()[0]
     logger.log_table_info("supplier_product_demand", count)
 
-    # Log supplier coverage summary
     coverage_summary = conn.execute("""
         SELECT 
             COUNT(DISTINCT Supplier) as total_suppliers,
@@ -4103,7 +4026,6 @@ def create_supplier_enriched_tables(conn):
     logger.log(f"     - Total Product-Supplier Relationships: {coverage_summary[1]:,}", "DATA")
     logger.log(f"     - Primary Supplier Relationships: {coverage_summary[2]:,}", "DATA")
 
-    # Log supplier diversity summary
     diversity_summary = conn.execute("""
         SELECT 
             Supplier_Diversity,
@@ -4116,39 +4038,6 @@ def create_supplier_enriched_tables(conn):
     logger.log(f"  └─ Supplier Diversity Summary:", "DATA")
     for _, row in diversity_summary.iterrows():
         logger.log(f"     - {row['Supplier_Diversity']}: {row['item_count']:,} items", "DATA")
-
-# ============================================================================
-# DATABASE BUILDER
-# ============================================================================
-class DatabaseBuilder:
-    def __init__(self):
-        self.conn = duckdb.connect(DB_PATH)
-    
-    def build_tables(self, stock_df, local_df, import_df, prf_df, returns_df, supplier_df):
-        create_master_tables(self.conn)
-        rebuild_aggregated_tables(self.conn)
-        create_pre_aggregated_summaries(self.conn)
-        create_instant_filter_tables(self.conn)
-        create_branch_item_monthly_summary(self.conn)
-        create_decision_support_tables(self.conn)
-        create_all_pivot_tables(self.conn)
-        create_demand_planning_tables(self.conn)
-        create_stock_tables(self.conn, stock_df)
-        create_stock_health_dashboard(self.conn)
-        create_branch_item_monthly_analysis(self.conn)
-        create_current_stock_recommendations(self.conn)
-        create_stock_status_summary(self.conn)
-        create_monthly_stock(self.conn)
-        create_purchase_tables(self.conn, local_df, import_df, returns_df)
-        create_prf_po_tables(self.conn, prf_df)
-        create_foc_tables(self.conn)
-        create_supplier_enriched_tables(self.conn)
-        # NEW: Supplier Master and Safety Stock
-        create_supplier_master_tables(self.conn, supplier_df)
-        create_safety_stock_tables(self.conn)
-    
-    def close(self):
-        self.conn.close()
 
 # ============================================================================
 # VALIDATION
@@ -4168,7 +4057,6 @@ def validate_data():
             except:
                 logger.log(f"  ❌ {row['table_name']}: Error", "WARNING", False)
         
-        # FOC Tables validation
         foc_tables = ['foc_sales_summary', 'foc_sales_monthly', 'foc_purchase_summary', 
                       'foc_purchase_monthly', 'foc_sales_outliers', 'foc_purchase_outliers',
                       'foc_demand_impact', 'foc_sales_by_branch', 'foc_sales_by_group']
@@ -4180,7 +4068,6 @@ def validate_data():
             except:
                 logger.log(f"  ❌ {table}: Not found", "WARNING", False)
         
-        # Safety Stock Tables
         safety_tables = ['safety_stock_by_supplier', 'safety_stock_by_item', 'safety_stock_summary']
         logger.log("🛡️ SAFETY STOCK TABLES:", "DATA")
         for table in safety_tables:
@@ -4190,7 +4077,6 @@ def validate_data():
             except:
                 logger.log(f"  ❌ {table}: Not found", "WARNING", False)
         
-        # Supplier Master
         try:
             count = conn.execute("SELECT COUNT(*) FROM supplier_master").fetchone()[0]
             logger.log(f"  ✅ supplier_master: {count:,} records", "INFO", False)
@@ -4208,7 +4094,7 @@ def validate_data():
 # ============================================================================
 if __name__ == "__main__":
     print("\n" + "="*80)
-    print("💊 PHARMA BI - COMPLETE MIGRATION (WITH SUPPLIER MASTER & SAFETY STOCK)")
+    print("💊 PHARMA BI - COMPLETE MIGRATION (FIXED)")
     print("="*80)
     print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*80)
@@ -4248,10 +4134,31 @@ if __name__ == "__main__":
         supplier_df = supplier_processor.process_file()
         
         logger.log("🏗️ BUILDING DATABASE TABLES...", "PROGRESS")
-        builder = DatabaseBuilder()
-        builder.build_tables(stock_df, local_df, import_df, prf_df, returns_df, supplier_df)
-        builder.close()
+        conn = duckdb.connect(DB_PATH)
+        conn.execute("PRAGMA memory_limit='4GB'")
         
+        create_master_tables(conn)
+        rebuild_aggregated_tables(conn)
+        create_pre_aggregated_summaries(conn)
+        create_instant_filter_tables(conn)
+        create_branch_item_monthly_summary(conn)
+        create_decision_support_tables(conn)
+        create_all_pivot_tables(conn)
+        create_demand_planning_tables(conn)
+        create_stock_tables(conn, stock_df)
+        create_stock_health_dashboard(conn)
+        create_branch_item_monthly_analysis(conn)
+        create_current_stock_recommendations(conn)
+        create_stock_status_summary(conn)
+        create_monthly_stock(conn)
+        create_purchase_tables(conn, local_df, import_df, returns_df)
+        create_prf_po_tables(conn, prf_df)
+        create_foc_tables(conn)
+        create_supplier_enriched_tables(conn)
+        create_supplier_master_tables(conn, supplier_df)
+        create_safety_stock_tables(conn)
+        
+        conn.close()
         validate_data()
         logger.save_summary()
         
@@ -4260,35 +4167,6 @@ if __name__ == "__main__":
         print("="*80)
         print(f"📄 Log file: {logger.log_file}")
         print("\n📌 Now run your dashboard: streamlit run app.py")
-        print("\n📌 KEY FIXES APPLIED:")
-        print("   - Purchase returns separated from purchases")
-        print("   - Negative quantities filtered out from local_purchase")
-        print("   - purchase_all_clean view created (excludes returns & outliers)")
-        print("   - purchase_returns table created for analysis")
-        print("\n📌 SUPPLIER MASTER INTEGRATED:")
-        print("   - supplier_master table created with Lead Time")
-        print("   - Lead Time used for Safety Stock calculation")
-        print("   - safety_stock_by_supplier: Supplier-level safety stock")
-        print("   - safety_stock_by_item: Item-level safety stock")
-        print("   - safety_stock_summary: Safety stock summaries")
-        print("\n📌 FOC TABLES CREATED:")
-        print("   - foc_sales_summary: Sales FOC by item and branch")
-        print("   - foc_sales_monthly: Monthly sales FOC trends")
-        print("   - foc_purchase_summary: Purchase FOC by vendor and item")
-        print("   - foc_purchase_monthly: Monthly purchase FOC trends")
-        print("   - foc_sales_outliers: Sales FOC outliers")
-        print("   - foc_purchase_outliers: Purchase FOC outliers")
-        print("   - foc_demand_impact: FOC impact on demand forecast")
-        print("   - foc_sales_by_branch: FOC by branch summary")
-        print("   - foc_sales_by_group: FOC by product group")
-        print("   - foc_adjusted_demand: FOC-adjusted demand view")
-        print("   - foc_recommendations: FOC recommendations view")
-        print("\n📌 SUPPLIER PURCHASE TABLES CREATED:")
-        print("   - supplier_purchase_detail: Every purchase transaction")
-        print("   - supplier_purchase_summary: Rollup by supplier")
-        print("   - supplier_purchase_by_item: Purchase by supplier + item")
-        print("   - supplier_purchase_monthly: Monthly purchase trends")
-        print("   - supplier_purchase_top_items: Top items per supplier")
         print("="*80)
         
     except Exception as e:

@@ -283,6 +283,7 @@ class UserManager:
                 'Created': row[6]
             })
         return pd.DataFrame(data)
+
 # ============================================================================
 # SESSION MANAGER & PERMISSION MANAGER
 # ============================================================================
@@ -727,13 +728,6 @@ if not SessionManager.is_authenticated():
     render_login_page()
     st.stop()
 
-st.set_page_config(
-    page_title="UNIQUE PHARMA - KINSHASA, GOMA & LUBUMBASHI",
-    page_icon="🏢",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
 # ============================================================================
 # DATABASE CONNECTION
 # ============================================================================
@@ -768,7 +762,6 @@ _db = DatabaseConnection()
 @st.cache_resource
 def get_connection():
     return _db.get_connection()
-
 # ============================================================================
 # DATE FILTER FUNCTIONS
 # ============================================================================

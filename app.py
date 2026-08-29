@@ -492,14 +492,6 @@ def render_login_page():
                 else:
                     st.markdown('<div class="login-error">⚠️ Please enter both username and password.</div>', unsafe_allow_html=True)
         st.markdown("""
-        <div style="text-align: center; margin-top: 12px; position: relative; z-index: 1;">
-            <div style="background: rgba(255,255,255,0.03); border-radius: 8px; padding: 8px 12px; display: inline-block;">
-                <span style="color: #667799; font-size: 0.7rem;">Demo Credentials: </span>
-                <span style="color: #8899bb; font-size: 0.7rem; margin: 0 8px;"><strong>admin</strong> / <strong>admin</strong></span>
-                <span style="color: #667799; font-size: 0.7rem;">•</span>
-                <span style="color: #8899bb; font-size: 0.7rem; margin: 0 8px;"><strong>manager</strong> / <strong>manager123</strong></span>
-            </div>
-        </div>
         <div class="security-badge">
             <span>🔒 Encrypted</span>
             <span>🛡️ Secure</span>
@@ -510,7 +502,7 @@ def render_login_page():
         </div>
         </div>
         """, unsafe_allow_html=True)
-
+        
 def render_user_profile():
     if not SessionManager.is_authenticated():
         return

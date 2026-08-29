@@ -1,5 +1,5 @@
 """
-PHARMA BI - COMPLETE MIGRATION SCRIPT (FIXED)
+PHARMA BI - COMPLETE MIGRATION SCRIPT (MEMORY FIXED)
 Reads all data files, inserts into DuckDB, and builds all tables.
 Includes Supplier Master, Safety Stock, FOC, and Supplier‑enriched tables.
 """
@@ -50,7 +50,7 @@ Path(RETURNS_PATH).mkdir(parents=True, exist_ok=True)
 Path(PRF_PO_PATH).mkdir(parents=True, exist_ok=True)
 
 # ============================================================================
-# LOGGING
+# LOGGING SYSTEM
 # ============================================================================
 class AdvancedLogger:
     def __init__(self):
@@ -66,7 +66,7 @@ class AdvancedLogger:
     
     def write_header(self):
         self.log_handle.write("="*100 + "\n")
-        self.log_handle.write("PHARMA BI - COMPLETE MIGRATION LOG (FIXED)\n")
+        self.log_handle.write("PHARMA BI - COMPLETE MIGRATION LOG (MEMORY FIXED)\n")
         self.log_handle.write(f"Started: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
         self.log_handle.write("="*100 + "\n\n")
     
@@ -198,7 +198,7 @@ class DateParser:
             return pd.to_datetime(series, errors='coerce')
 
 # ============================================================================
-# PURCHASE RETURN PROCESSOR (FIXED)
+# PURCHASE RETURN PROCESSOR
 # ============================================================================
 class PurchaseReturnProcessor:
     def __init__(self):
@@ -246,6 +246,7 @@ class PurchaseReturnProcessor:
                 
                 df = df.dropna(subset=['Item_Code', 'Purchase_Date'])
                 
+                # Extract returns (negative values)
                 returns_df = df[(df['Qty'] < 0) | (df['Amount_USD'] < 0) | (df['FOC_Qty'] < 0)].copy()
                 if not returns_df.empty:
                     for col in ['Qty', 'Amount_USD', 'FOC_Qty']:
@@ -267,7 +268,7 @@ class PurchaseReturnProcessor:
         return None
 
 # ============================================================================
-# LOCAL PURCHASE PROCESSOR (FIXED)
+# LOCAL PURCHASE PROCESSOR
 # ============================================================================
 class LocalPurchaseProcessor:
     def __init__(self):
@@ -315,7 +316,7 @@ class LocalPurchaseProcessor:
                 
                 df = df.dropna(subset=['Item_Code', 'Purchase_Date'])
                 
-                # Filter out returns
+                # Filter out returns (keep only positive purchases)
                 df = df[(df['Qty'] >= 0) & (df['Amount_USD'] >= 0) & (df['Cost_Rate'] >= 0)].copy()
                 
                 if not df.empty:
@@ -1003,7 +1004,7 @@ class SupplierMasterProcessor:
             return None
 
 # ============================================================================
-# MASTER TABLES CREATION (FIXED – fill nulls)
+# MASTER TABLES CREATION
 # ============================================================================
 def create_master_tables(conn):
     logger.log("📋 Creating item_master with supplier enhancements...", "PROGRESS")
@@ -1060,7 +1061,7 @@ def create_master_tables(conn):
         
         df['Primary_Supplier'] = df.apply(get_primary_supplier, axis=1)
         
-        # --- FIX: fill all string columns with '' and convert to str ---
+        # FIX: fill nulls
         for col in ['Item_Name', 'Brand_Name', 'Product_Group', 'Division', 'Dosage_Form',
                     'Strength', 'Pack_Size', 'Route_Admin', 'Indications', 'Posology']:
             if col not in df.columns:
@@ -1074,7 +1075,6 @@ def create_master_tables(conn):
         if 'Primary_Supplier' in df.columns:
             df['Primary_Supplier'] = df['Primary_Supplier'].fillna('').astype(str)
         
-        # Clean All_Suppliers to be a list (not None)
         def clean_supplier_list(val):
             if val is None or (isinstance(val, float) and np.isnan(val)):
                 return []
@@ -1084,7 +1084,6 @@ def create_master_tables(conn):
                 return [val.strip()] if val.strip() else []
             return []
         df['All_Suppliers'] = df['All_Suppliers'].apply(clean_supplier_list)
-        # ----------------------------------------------------------------
         
         conn.register('item_temp', df)
         conn.execute("DROP TABLE IF EXISTS item_master")
@@ -1193,52 +1192,101 @@ def create_master_tables(conn):
         conn.execute("CREATE TABLE IF NOT EXISTS location_master (Branch VARCHAR, Location VARCHAR)")
 
 # ============================================================================
-# AGGREGATED TABLES (unchanged)
+# REBUILD AGGREGATED TABLES (MEMORY FIXED - CHUNKED BY MONTH)
 # ============================================================================
 def rebuild_aggregated_tables(conn):
-    logger.log("🔄 Rebuilding aggregated tables from raw data...", "PROGRESS")
+    logger.log("🔄 Rebuilding aggregated tables from raw data (memory-optimised)...", "PROGRESS")
     
+    # Set temp directory for disk spilling
+    conn.execute("PRAGMA temp_directory='/tmp'")
+    # Lower memory limit to force spilling
+    conn.execute("PRAGMA memory_limit='2GB'")
+    
+    # Drop tables if exist
     conn.execute("DROP TABLE IF EXISTS aggregated_sales")
-    conn.execute("""
-        CREATE TABLE aggregated_sales AS
-        SELECT 
-            DATE_TRUNC('month', Sale_Date) as Month,
-            Branch,
-            Item_Code,
-            SUM(Quantity) as Total_Qty,
-            SUM(Amount_USD) as Total_Amount,
-            COUNT(DISTINCT Invoice_No) as Transactions,
-            COUNT(DISTINCT Customer_Id) as Unique_Customers,
-            EXTRACT(YEAR FROM DATE_TRUNC('month', Sale_Date)) as Year,
-            EXTRACT(MONTH FROM DATE_TRUNC('month', Sale_Date)) as Month_Num,
-            EXTRACT(QUARTER FROM DATE_TRUNC('month', Sale_Date)) as Quarter
-        FROM sales_raw
-        WHERE Sale_Date IS NOT NULL AND Quantity > 0
-        GROUP BY DATE_TRUNC('month', Sale_Date), Branch, Item_Code
-    """)
-    count = conn.execute("SELECT COUNT(*) FROM aggregated_sales").fetchone()[0]
-    logger.log_table_info("aggregated_sales", count)
-    
     conn.execute("DROP TABLE IF EXISTS aggregated_returns")
-    conn.execute("""
-        CREATE TABLE aggregated_returns AS
-        SELECT 
-            DATE_TRUNC('month', Return_Date) as Month,
-            Branch,
-            Item_Code,
-            SUM(Return_Qty) as Total_Return_Qty,
-            SUM(Amount_USD) as Total_Return_Amount,
-            COUNT(DISTINCT Return_No) as Return_Transactions,
-            EXTRACT(YEAR FROM DATE_TRUNC('month', Return_Date)) as Year,
-            EXTRACT(MONTH FROM DATE_TRUNC('month', Return_Date)) as Month_Num,
-            EXTRACT(QUARTER FROM DATE_TRUNC('month', Return_Date)) as Quarter
-        FROM returns_raw
-        WHERE Return_Date IS NOT NULL
-        GROUP BY DATE_TRUNC('month', Return_Date), Branch, Item_Code
-    """)
-    count = conn.execute("SELECT COUNT(*) FROM aggregated_returns").fetchone()[0]
-    logger.log_table_info("aggregated_returns", count)
     
+    # Create empty aggregated_sales table with proper schema
+    conn.execute("""
+        CREATE TABLE aggregated_sales (
+            Month DATE,
+            Branch VARCHAR,
+            Item_Code VARCHAR,
+            Total_Qty DOUBLE,
+            Total_Amount DOUBLE,
+            Transactions INTEGER,
+            Unique_Customers INTEGER,
+            Year INTEGER,
+            Month_Num INTEGER,
+            Quarter INTEGER
+        )
+    """)
+    
+    # Create empty aggregated_returns table
+    conn.execute("""
+        CREATE TABLE aggregated_returns (
+            Month DATE,
+            Branch VARCHAR,
+            Item_Code VARCHAR,
+            Total_Return_Qty DOUBLE,
+            Total_Return_Amount DOUBLE,
+            Return_Transactions INTEGER,
+            Year INTEGER,
+            Month_Num INTEGER,
+            Quarter INTEGER
+        )
+    """)
+    
+    # Get distinct months from sales_raw
+    months_df = conn.execute("SELECT DISTINCT DATE_TRUNC('month', Sale_Date) as Month FROM sales_raw WHERE Sale_Date IS NOT NULL ORDER BY Month").df()
+    if not months_df.empty:
+        for month in months_df['Month']:
+            logger.log(f"  Processing sales aggregation for month: {month.strftime('%Y-%m')}", "PROGRESS")
+            conn.execute("""
+                INSERT INTO aggregated_sales
+                SELECT 
+                    DATE_TRUNC('month', Sale_Date) as Month,
+                    Branch,
+                    Item_Code,
+                    SUM(Quantity) as Total_Qty,
+                    SUM(Amount_USD) as Total_Amount,
+                    COUNT(DISTINCT Invoice_No) as Transactions,
+                    COUNT(DISTINCT Customer_Id) as Unique_Customers,
+                    EXTRACT(YEAR FROM DATE_TRUNC('month', Sale_Date)) as Year,
+                    EXTRACT(MONTH FROM DATE_TRUNC('month', Sale_Date)) as Month_Num,
+                    EXTRACT(QUARTER FROM DATE_TRUNC('month', Sale_Date)) as Quarter
+                FROM sales_raw
+                WHERE Sale_Date >= ? AND Sale_Date < ? + INTERVAL '1 month'
+                  AND Quantity > 0
+                GROUP BY DATE_TRUNC('month', Sale_Date), Branch, Item_Code
+            """, [month, month])
+    else:
+        # If no sales data, leave empty
+        pass
+    
+    # Get distinct months from returns_raw
+    months_df = conn.execute("SELECT DISTINCT DATE_TRUNC('month', Return_Date) as Month FROM returns_raw WHERE Return_Date IS NOT NULL ORDER BY Month").df()
+    if not months_df.empty:
+        for month in months_df['Month']:
+            logger.log(f"  Processing returns aggregation for month: {month.strftime('%Y-%m')}", "PROGRESS")
+            conn.execute("""
+                INSERT INTO aggregated_returns
+                SELECT 
+                    DATE_TRUNC('month', Return_Date) as Month,
+                    Branch,
+                    Item_Code,
+                    SUM(Return_Qty) as Total_Return_Qty,
+                    SUM(Amount_USD) as Total_Return_Amount,
+                    COUNT(DISTINCT Return_No) as Return_Transactions,
+                    EXTRACT(YEAR FROM DATE_TRUNC('month', Return_Date)) as Year,
+                    EXTRACT(MONTH FROM DATE_TRUNC('month', Return_Date)) as Month_Num,
+                    EXTRACT(QUARTER FROM DATE_TRUNC('month', Return_Date)) as Quarter
+                FROM returns_raw
+                WHERE Return_Date >= ? AND Return_Date < ? + INTERVAL '1 month'
+                GROUP BY DATE_TRUNC('month', Return_Date), Branch, Item_Code
+            """, [month, month])
+    
+    # Now build dashboard_data using the aggregated tables
     logger.log("📊 Creating materialized dashboard_data table...", "PROGRESS")
     try:
         conn.execute("DROP TABLE IF EXISTS dashboard_data")
@@ -1285,7 +1333,7 @@ def rebuild_aggregated_tables(conn):
     logger.log_table_info("dashboard_data", count)
 
 # ============================================================================
-# PRE-AGGREGATED SUMMARIES (unchanged)
+# PRE-AGGREGATED SUMMARIES
 # ============================================================================
 def create_pre_aggregated_summaries(conn):
     logger.log("📊 Creating pre-aggregated summary tables...", "PROGRESS")
@@ -1398,7 +1446,7 @@ def create_pre_aggregated_summaries(conn):
     logger.log_table_info("division_monthly_summary", count)
 
 # ============================================================================
-# INSTANT FILTER TABLES (unchanged)
+# INSTANT FILTER TABLES
 # ============================================================================
 def create_instant_filter_tables(conn):
     logger.log("📊 Creating INSTANT FILTER TABLES...", "PROGRESS")
@@ -1454,7 +1502,7 @@ def create_instant_filter_tables(conn):
         traceback.print_exc()
 
 # ============================================================================
-# BRANCH-ITEM MONTHLY SUMMARY (unchanged)
+# BRANCH-ITEM MONTHLY SUMMARY
 # ============================================================================
 def create_branch_item_monthly_summary(conn):
     logger.log("📊 Creating branch_item_monthly_summary...", "PROGRESS")
@@ -1485,7 +1533,7 @@ def create_branch_item_monthly_summary(conn):
         traceback.print_exc()
 
 # ============================================================================
-# DECISION SUPPORT TABLES (unchanged)
+# DECISION SUPPORT TABLES
 # ============================================================================
 def create_decision_support_tables(conn):
     logger.log("📊 Creating decision support tables...", "PROGRESS")
@@ -1615,7 +1663,7 @@ def create_decision_support_tables(conn):
         traceback.print_exc()
 
 # ============================================================================
-# PIVOT TABLES (unchanged)
+# PIVOT TABLES
 # ============================================================================
 def create_all_pivot_tables(conn):
     logger.log("📊 Creating ALL pivot tables...", "PROGRESS")
@@ -1826,7 +1874,7 @@ def create_all_pivot_tables(conn):
     logger.log_table_info("yearly_summary", count)
 
 # ============================================================================
-# DEMAND PLANNING TABLES (unchanged)
+# DEMAND PLANNING TABLES
 # ============================================================================
 def create_demand_planning_tables(conn):
     logger.log("📊 Creating DEMAND PLANNING tables...", "PROGRESS")
@@ -2052,7 +2100,7 @@ def create_demand_planning_tables(conn):
     logger.log_table_info("forecast_summary", count)
 
 # ============================================================================
-# STOCK TABLES (unchanged)
+# STOCK TABLES
 # ============================================================================
 def create_stock_tables(conn, stock_df):
     if stock_df is None or stock_df.empty:
@@ -2281,7 +2329,7 @@ def create_stock_tables(conn, stock_df):
     logger.log_table_info("stock_vs_sales (view)", count)
 
 # ============================================================================
-# STOCK HEALTH DASHBOARD (unchanged)
+# STOCK HEALTH DASHBOARD
 # ============================================================================
 def create_stock_health_dashboard(conn):
     logger.log("📊 Creating stock_health_dashboard...", "PROGRESS")
@@ -2329,7 +2377,7 @@ def create_stock_health_dashboard(conn):
         traceback.print_exc()
 
 # ============================================================================
-# BRANCH-ITEM MONTHLY ANALYSIS (unchanged)
+# BRANCH-ITEM MONTHLY ANALYSIS
 # ============================================================================
 def create_branch_item_monthly_analysis(conn):
     logger.log("📊 Creating branch_item_monthly_analysis...", "PROGRESS")
@@ -2374,7 +2422,7 @@ def create_branch_item_monthly_analysis(conn):
         traceback.print_exc()
 
 # ============================================================================
-# CURRENT STOCK RECOMMENDATIONS (unchanged)
+# CURRENT STOCK RECOMMENDATIONS
 # ============================================================================
 def create_current_stock_recommendations(conn):
     logger.log("📊 Creating current_stock_recommendations...", "PROGRESS")
@@ -2440,7 +2488,7 @@ def create_current_stock_recommendations(conn):
         traceback.print_exc()
 
 # ============================================================================
-# STOCK STATUS SUMMARY (unchanged)
+# STOCK STATUS SUMMARY
 # ============================================================================
 def create_stock_status_summary(conn):
     logger.log("📊 Creating stock_status_summary...", "PROGRESS")
@@ -2495,7 +2543,7 @@ def create_stock_status_summary(conn):
         traceback.print_exc()
 
 # ============================================================================
-# MONTHLY STOCK (unchanged)
+# MONTHLY STOCK
 # ============================================================================
 def create_monthly_stock(conn):
     logger.log("📊 Creating monthly_stock table...", "PROGRESS")
@@ -2523,7 +2571,7 @@ def create_monthly_stock(conn):
     logger.log_table_info("monthly_stock", count)
 
 # ============================================================================
-# PURCHASE RETURNS TABLE (unchanged)
+# PURCHASE RETURNS TABLE
 # ============================================================================
 def create_purchase_returns_table(conn, returns_df):
     if returns_df is None or returns_df.empty:
@@ -2576,7 +2624,7 @@ def create_purchase_returns_table(conn, returns_df):
     logger.log_table_info("purchase_returns", count)
 
 # ============================================================================
-# PURCHASE TABLES (unchanged)
+# PURCHASE TABLES
 # ============================================================================
 def create_purchase_tables(conn, local_df, import_df, returns_df):
     logger.log("📊 Creating PURCHASE tables...", "PROGRESS")
@@ -2864,7 +2912,7 @@ def create_purchase_tables(conn, local_df, import_df, returns_df):
     logger.log_table_info("purchase_vs_sales (view)", count)
 
 # ============================================================================
-# PRF/PO TABLES (unchanged)
+# PRF/PO TABLES
 # ============================================================================
 def create_prf_po_tables(conn, prf_df):
     if prf_df is None or prf_df.empty:
@@ -2943,7 +2991,7 @@ def create_prf_po_tables(conn, prf_df):
     logger.log_table_info("supplier_lead_time_performance (view)", count)
 
 # ============================================================================
-# SUPPLIER MASTER TABLES (unchanged)
+# SUPPLIER MASTER TABLES
 # ============================================================================
 def create_supplier_master_tables(conn, supplier_df):
     if supplier_df is None or supplier_df.empty:
@@ -2995,7 +3043,7 @@ def create_supplier_master_tables(conn, supplier_df):
     logger.log(f"     - Suppliers with Lead Time: {lead_summary[4]:,}/{lead_summary[3]:,}", "DATA")
 
 # ============================================================================
-# SAFETY STOCK TABLES (unchanged)
+# SAFETY STOCK TABLES
 # ============================================================================
 def create_safety_stock_tables(conn):
     logger.log("🛡️ Creating SAFETY STOCK tables...", "PROGRESS")
@@ -3208,7 +3256,7 @@ def create_safety_stock_tables(conn):
     logger.log_table_info("safety_stock_summary", count)
 
 # ============================================================================
-# FOC TABLES (unchanged)
+# FOC TABLES
 # ============================================================================
 def create_foc_tables(conn):
     logger.log("🎯 Creating FOC tables...", "PROGRESS")
@@ -3577,7 +3625,7 @@ def create_foc_tables(conn):
     logger.log("✅ FOC tables created successfully!", "SUCCESS")
 
 # ============================================================================
-# SUPPLIER-ENRICHED TABLES (unchanged)
+# SUPPLIER-ENRICHED TABLES
 # ============================================================================
 def create_supplier_enriched_tables(conn):
     logger.log("🏢 Creating SUPPLIER-ENRICHED tables...", "PROGRESS")
@@ -4094,7 +4142,7 @@ def validate_data():
 # ============================================================================
 if __name__ == "__main__":
     print("\n" + "="*80)
-    print("💊 PHARMA BI - COMPLETE MIGRATION (FIXED)")
+    print("💊 PHARMA BI - COMPLETE MIGRATION (MEMORY FIXED)")
     print("="*80)
     print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*80)
@@ -4135,7 +4183,9 @@ if __name__ == "__main__":
         
         logger.log("🏗️ BUILDING DATABASE TABLES...", "PROGRESS")
         conn = duckdb.connect(DB_PATH)
-        conn.execute("PRAGMA memory_limit='4GB'")
+        # Set temp directory and memory limit
+        conn.execute("PRAGMA temp_directory='/tmp'")
+        conn.execute("PRAGMA memory_limit='3GB'")
         
         create_master_tables(conn)
         rebuild_aggregated_tables(conn)

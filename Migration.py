@@ -1,5 +1,5 @@
 """
-PHARMA BI - COMPLETE MIGRATION SCRIPT (FOC OPTIMISED)
+PHARMA BI - COMPLETE MIGRATION SCRIPT (FOC OPTIMISED, AMBIGUITY FIXED)
 Reads all data files, inserts into DuckDB, and builds all tables.
 Includes Supplier Master, Safety Stock, FOC, and Supplier‑enriched tables.
 """
@@ -50,7 +50,7 @@ Path(RETURNS_PATH).mkdir(parents=True, exist_ok=True)
 Path(PRF_PO_PATH).mkdir(parents=True, exist_ok=True)
 
 # ============================================================================
-# LOGGING SYSTEM (unchanged)
+# LOGGING SYSTEM
 # ============================================================================
 class AdvancedLogger:
     def __init__(self):
@@ -66,7 +66,7 @@ class AdvancedLogger:
     
     def write_header(self):
         self.log_handle.write("="*100 + "\n")
-        self.log_handle.write("PHARMA BI - COMPLETE MIGRATION LOG (FOC OPTIMISED)\n")
+        self.log_handle.write("PHARMA BI - COMPLETE MIGRATION LOG (FOC OPTIMISED, AMBIGUITY FIXED)\n")
         self.log_handle.write(f"Started: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
         self.log_handle.write("="*100 + "\n\n")
     
@@ -165,7 +165,7 @@ class AdvancedLogger:
 logger = AdvancedLogger()
 
 # ============================================================================
-# DATE PARSER (unchanged)
+# DATE PARSER
 # ============================================================================
 class DateParser:
     @staticmethod
@@ -268,7 +268,7 @@ class PurchaseReturnProcessor:
         return None
 
 # ============================================================================
-# LOCAL PURCHASE PROCESSOR (unchanged)
+# LOCAL PURCHASE PROCESSOR
 # ============================================================================
 class LocalPurchaseProcessor:
     def __init__(self):
@@ -337,7 +337,7 @@ class LocalPurchaseProcessor:
         return None
 
 # ============================================================================
-# IMPORT PURCHASE PROCESSOR (unchanged)
+# IMPORT PURCHASE PROCESSOR
 # ============================================================================
 class ImportPurchaseProcessor:
     def __init__(self):
@@ -422,7 +422,7 @@ class ImportPurchaseProcessor:
         return None
 
 # ============================================================================
-# STOCK FILE PROCESSOR (unchanged)
+# STOCK FILE PROCESSOR
 # ============================================================================
 class StockFileProcessor:
     def __init__(self):
@@ -587,7 +587,7 @@ class StockFileProcessor:
         return None
 
 # ============================================================================
-# INCREMENTAL SALES / RETURNS PROCESSOR (unchanged)
+# INCREMENTAL SALES / RETURNS PROCESSOR
 # ============================================================================
 class IncrementalFileProcessor:
     def __init__(self):
@@ -862,7 +862,7 @@ class IncrementalFileProcessor:
         return processed_any
 
 # ============================================================================
-# PRF/PO PROCESSOR (unchanged)
+# PRF/PO PROCESSOR
 # ============================================================================
 class PRFPOProcessor:
     def __init__(self):
@@ -913,7 +913,7 @@ class PRFPOProcessor:
             return None
 
 # ============================================================================
-# SUPPLIER MASTER PROCESSOR (unchanged)
+# SUPPLIER MASTER PROCESSOR
 # ============================================================================
 class SupplierMasterProcessor:
     def __init__(self):
@@ -1002,7 +1002,7 @@ class SupplierMasterProcessor:
             return None
 
 # ============================================================================
-# MASTER TABLES CREATION (unchanged)
+# MASTER TABLES CREATION
 # ============================================================================
 def create_master_tables(conn):
     logger.log("📋 Creating item_master with supplier enhancements...", "PROGRESS")
@@ -1242,20 +1242,20 @@ def rebuild_aggregated_tables(conn):
             conn.execute("""
                 INSERT INTO aggregated_sales
                 SELECT 
-                    DATE_TRUNC('month', Sale_Date) as Month,
-                    Branch,
-                    Item_Code,
-                    SUM(Quantity) as Total_Qty,
-                    SUM(Amount_USD) as Total_Amount,
-                    COUNT(DISTINCT Invoice_No) as Transactions,
-                    COUNT(DISTINCT Customer_Id) as Unique_Customers,
-                    EXTRACT(YEAR FROM DATE_TRUNC('month', Sale_Date)) as Year,
-                    EXTRACT(MONTH FROM DATE_TRUNC('month', Sale_Date)) as Month_Num,
-                    EXTRACT(QUARTER FROM DATE_TRUNC('month', Sale_Date)) as Quarter
+                    DATE_TRUNC('month', sales_raw.Sale_Date) as Month,
+                    sales_raw.Branch,
+                    sales_raw.Item_Code,
+                    SUM(sales_raw.Quantity) as Total_Qty,
+                    SUM(sales_raw.Amount_USD) as Total_Amount,
+                    COUNT(DISTINCT sales_raw.Invoice_No) as Transactions,
+                    COUNT(DISTINCT sales_raw.Customer_Id) as Unique_Customers,
+                    EXTRACT(YEAR FROM DATE_TRUNC('month', sales_raw.Sale_Date)) as Year,
+                    EXTRACT(MONTH FROM DATE_TRUNC('month', sales_raw.Sale_Date)) as Month_Num,
+                    EXTRACT(QUARTER FROM DATE_TRUNC('month', sales_raw.Sale_Date)) as Quarter
                 FROM sales_raw
-                WHERE Sale_Date >= ? AND Sale_Date < ? + INTERVAL '1 month'
-                  AND Quantity > 0
-                GROUP BY DATE_TRUNC('month', Sale_Date), Branch, Item_Code
+                WHERE sales_raw.Sale_Date >= ? AND sales_raw.Sale_Date < ? + INTERVAL '1 month'
+                  AND sales_raw.Quantity > 0
+                GROUP BY DATE_TRUNC('month', sales_raw.Sale_Date), sales_raw.Branch, sales_raw.Item_Code
             """, [month, month])
     else:
         # If no sales data, leave empty
@@ -1269,18 +1269,18 @@ def rebuild_aggregated_tables(conn):
             conn.execute("""
                 INSERT INTO aggregated_returns
                 SELECT 
-                    DATE_TRUNC('month', Return_Date) as Month,
-                    Branch,
-                    Item_Code,
-                    SUM(Return_Qty) as Total_Return_Qty,
-                    SUM(Amount_USD) as Total_Return_Amount,
-                    COUNT(DISTINCT Return_No) as Return_Transactions,
-                    EXTRACT(YEAR FROM DATE_TRUNC('month', Return_Date)) as Year,
-                    EXTRACT(MONTH FROM DATE_TRUNC('month', Return_Date)) as Month_Num,
-                    EXTRACT(QUARTER FROM DATE_TRUNC('month', Return_Date)) as Quarter
+                    DATE_TRUNC('month', returns_raw.Return_Date) as Month,
+                    returns_raw.Branch,
+                    returns_raw.Item_Code,
+                    SUM(returns_raw.Return_Qty) as Total_Return_Qty,
+                    SUM(returns_raw.Amount_USD) as Total_Return_Amount,
+                    COUNT(DISTINCT returns_raw.Return_No) as Return_Transactions,
+                    EXTRACT(YEAR FROM DATE_TRUNC('month', returns_raw.Return_Date)) as Year,
+                    EXTRACT(MONTH FROM DATE_TRUNC('month', returns_raw.Return_Date)) as Month_Num,
+                    EXTRACT(QUARTER FROM DATE_TRUNC('month', returns_raw.Return_Date)) as Quarter
                 FROM returns_raw
-                WHERE Return_Date >= ? AND Return_Date < ? + INTERVAL '1 month'
-                GROUP BY DATE_TRUNC('month', Return_Date), Branch, Item_Code
+                WHERE returns_raw.Return_Date >= ? AND returns_raw.Return_Date < ? + INTERVAL '1 month'
+                GROUP BY DATE_TRUNC('month', returns_raw.Return_Date), returns_raw.Branch, returns_raw.Item_Code
             """, [month, month])
     
     # Now build dashboard_data using the aggregated tables
@@ -1330,7 +1330,7 @@ def rebuild_aggregated_tables(conn):
     logger.log_table_info("dashboard_data", count)
 
 # ============================================================================
-# FOC SALES AGGREGATION (NEW) - PRE-AGGREGATE FOC DATA TO AVOID OOM
+# FOC SALES AGGREGATION (FIXED AMBIGUITY)
 # ============================================================================
 def create_foc_sales_agg(conn):
     logger.log("🎯 Creating pre-aggregated FOC sales table...", "PROGRESS")
@@ -1338,24 +1338,24 @@ def create_foc_sales_agg(conn):
     conn.execute("""
         CREATE TABLE foc_sales_agg AS
         SELECT 
-            DATE_TRUNC('month', Sale_Date) as Month,
-            Branch,
-            Item_Code,
+            DATE_TRUNC('month', sales_raw.Sale_Date) as Month,
+            sales_raw.Branch,
+            sales_raw.Item_Code,
             im.Item_Name,
             im.Product_Group,
             im.Division,
             lm.Location,
-            SUM(Quantity) as Total_Qty,
-            SUM(Free_Qty) as Total_FOC_Qty,
-            SUM(Amount_USD) as Total_Revenue,
-            COUNT(DISTINCT Invoice_No) as Total_Transactions,
-            COUNT(DISTINCT CASE WHEN Free_Qty > 0 THEN Invoice_No END) as FOC_Transactions,
-            COUNT(DISTINCT Customer_Id) as Unique_Customers
+            SUM(sales_raw.Quantity) as Total_Qty,
+            SUM(sales_raw.Free_Qty) as Total_FOC_Qty,
+            SUM(sales_raw.Amount_USD) as Total_Revenue,
+            COUNT(DISTINCT sales_raw.Invoice_No) as Total_Transactions,
+            COUNT(DISTINCT CASE WHEN sales_raw.Free_Qty > 0 THEN sales_raw.Invoice_No END) as FOC_Transactions,
+            COUNT(DISTINCT sales_raw.Customer_Id) as Unique_Customers
         FROM sales_raw
-        LEFT JOIN item_master im ON Item_Code = im.Item_Code
-        LEFT JOIN location_master lm ON Branch = lm.Branch
-        WHERE Quantity > 0 AND Free_Qty >= 0
-        GROUP BY DATE_TRUNC('month', Sale_Date), Branch, Item_Code, im.Item_Name, im.Product_Group, im.Division, lm.Location
+        LEFT JOIN item_master im ON sales_raw.Item_Code = im.Item_Code
+        LEFT JOIN location_master lm ON sales_raw.Branch = lm.Branch
+        WHERE sales_raw.Quantity > 0 AND sales_raw.Free_Qty >= 0
+        GROUP BY DATE_TRUNC('month', sales_raw.Sale_Date), sales_raw.Branch, sales_raw.Item_Code, im.Item_Name, im.Product_Group, im.Division, lm.Location
     """)
     count = conn.execute("SELECT COUNT(*) FROM foc_sales_agg").fetchone()[0]
     logger.log_table_info("foc_sales_agg (pre-aggregated)", count)
@@ -4173,7 +4173,7 @@ def validate_data():
 # ============================================================================
 if __name__ == "__main__":
     print("\n" + "="*80)
-    print("💊 PHARMA BI - COMPLETE MIGRATION (FOC OPTIMISED)")
+    print("💊 PHARMA BI - COMPLETE MIGRATION (FOC OPTIMISED, AMBIGUITY FIXED)")
     print("="*80)
     print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*80)

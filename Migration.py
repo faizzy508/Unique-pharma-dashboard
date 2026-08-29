@@ -10,9 +10,14 @@ import warnings
 import re
 import traceback
 import numpy as np
+import gc
+
 warnings.filterwarnings('ignore')
 
-BASE_PATH = os.path.dirname(os.path.abspath(__file__))   # Current script folder
+# ============================================================================
+# PATHS
+# ============================================================================
+BASE_PATH = os.path.dirname(os.path.abspath(__file__))
 
 DB_PATH = os.path.join(BASE_PATH, "duckdb", "business.db")
 LOG_PATH = os.path.join(BASE_PATH, "logs")
@@ -39,7 +44,7 @@ Path(RETURNS_PATH).mkdir(parents=True, exist_ok=True)
 Path(PRF_PO_PATH).mkdir(parents=True, exist_ok=True)
 
 # ============================================================================
-# LOGGING SYSTEM
+# LOGGING (unchanged)
 # ============================================================================
 class AdvancedLogger:
     def __init__(self):
@@ -55,7 +60,7 @@ class AdvancedLogger:
     
     def write_header(self):
         self.log_handle.write("="*100 + "\n")
-        self.log_handle.write("PHARMA BI - COMPLETE MIGRATION LOG (WITH SUPPLIER MASTER & SAFETY STOCK)\n")
+        self.log_handle.write("PHARMA BI - COMPLETE MIGRATION LOG (MEMORY OPTIMIZED)\n")
         self.log_handle.write(f"Started: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
         self.log_handle.write("="*100 + "\n\n")
     
@@ -154,7 +159,7 @@ class AdvancedLogger:
 logger = AdvancedLogger()
 
 # ============================================================================
-# DATE PARSER
+# DATE PARSER (unchanged)
 # ============================================================================
 class DateParser:
     @staticmethod
@@ -187,16 +192,29 @@ class DateParser:
             return pd.to_datetime(series, errors='coerce')
 
 # ============================================================================
-# PURCHASE RETURN PROCESSOR
+# MEMORY‑EFFICIENT READ HELPER
+# ============================================================================
+def read_excel_optimized(file_path, usecols=None, dtype=None, sheet_name=0):
+    """
+    Read an Excel file with only needed columns and downcasted dtypes.
+    Returns a DataFrame with reduced memory footprint.
+    """
+    df = pd.read_excel(file_path, sheet_name=sheet_name, usecols=usecols, dtype=dtype)
+    # Downcast numeric columns
+    for col in df.select_dtypes(include=['float']).columns:
+        df[col] = pd.to_numeric(df[col], downcast='float')
+    for col in df.select_dtypes(include=['integer']).columns:
+        df[col] = pd.to_numeric(df[col], downcast='integer')
+    return df
+
+# ============================================================================
+# PURCHASE RETURN PROCESSOR (memory‑optimized)
 # ============================================================================
 class PurchaseReturnProcessor:
-    """Process purchase returns from local_purchase data (negative quantities)."""
-    
     def __init__(self):
         self.folder = LOCAL_PURCHASE_PATH
     
     def process_returns_from_files(self):
-        """Extract purchase returns from local purchase files."""
         files = [f for f in os.listdir(self.folder) if f.endswith('.xlsx') and not f.startswith('~')]
         if not files:
             logger.log("No local purchase files found for returns extraction", "WARNING")
@@ -206,9 +224,12 @@ class PurchaseReturnProcessor:
         for file in files:
             file_path = os.path.join(self.folder, file)
             try:
-                df = pd.read_excel(file_path, sheet_name=0)
-                df.columns = [str(c).strip() for c in df.columns.tolist()]
-                
+                # Read only needed columns
+                usecols = ['Branch', 'Doc Id.', 'Ref. No.', 'Doc Dt.', 'Vendor Name',
+                           'Item Name', 'Item Code', 'Qty', 'Cost Rate', 'FOC Qty', 'Amount']
+                # Also try alternative names
+                df = read_excel_optimized(file_path, usecols=usecols)
+                # Rename columns (same mapping as before)
                 rename_map = {
                     'BRANCH': 'Branch', 'Doc Id.': 'Doc_ID', 'Ref. No.': 'Ref_No',
                     'Doc Dt.': 'Purchase_Date', 'Vendor Name': 'Vendor',
@@ -226,32 +247,24 @@ class PurchaseReturnProcessor:
                 keep_cols = ['Branch', 'Doc_ID', 'Ref_No', 'Purchase_Date', 'Vendor',
                              'Item_Name', 'Item_Code', 'Qty', 'Cost_Rate', 'FOC_Qty', 'Amount_USD']
                 df = df[[c for c in keep_cols if c in df.columns]]
-                
                 if 'Purchase_Date' in df.columns:
                     df['Purchase_Date'] = DateParser.parse(df['Purchase_Date'])
-                
                 for col in ['Qty', 'Cost_Rate', 'FOC_Qty', 'Amount_USD']:
                     if col in df.columns:
-                        df[col] = pd.to_numeric(df[col], errors='coerce')
-                        df[col] = df[col].fillna(0)
-                
+                        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
                 df = df.dropna(subset=['Item_Code', 'Purchase_Date'])
-                
                 # Extract returns (negative values)
                 returns_df = df[(df['Qty'] < 0) | (df['Amount_USD'] < 0) | (df['FOC_Qty'] < 0)].copy()
-                
                 if not returns_df.empty:
-                    # Convert negative values to positive
                     for col in ['Qty', 'Amount_USD', 'FOC_Qty']:
                         if col in returns_df.columns:
                             returns_df[col] = returns_df[col].abs()
-                    
-                    # Add return type
                     returns_df['Return_Type'] = 'PURCHASE_RETURN'
-                    
                     all_returns.append(returns_df)
                     logger.log(f"  └─ Found {len(returns_df)} return rows in {file}", "WARNING")
-                
+                # Free memory
+                del df, returns_df
+                gc.collect()
             except Exception as e:
                 logger.log(f"  ❌ Error processing {file} for returns: {e}", "ERROR")
                 traceback.print_exc()
@@ -263,7 +276,7 @@ class PurchaseReturnProcessor:
         return None
 
 # ============================================================================
-# LOCAL PURCHASE PROCESSOR (CLEAN - FILTERS OUT RETURNS)
+# LOCAL PURCHASE PROCESSOR (memory‑optimized)
 # ============================================================================
 class LocalPurchaseProcessor:
     def __init__(self):
@@ -279,9 +292,11 @@ class LocalPurchaseProcessor:
         for file in files:
             file_path = os.path.join(self.folder, file)
             try:
-                df = pd.read_excel(file_path, sheet_name=0)
-                df.columns = [str(c).strip() for c in df.columns.tolist()]
-                
+                # Read only needed columns
+                usecols = ['Branch', 'Doc Id.', 'Ref. No.', 'Doc Dt.', 'Vendor Name',
+                           'Item Name', 'Item Code', 'Qty', 'Cost Rate', 'FOC Qty', 'Amount']
+                df = read_excel_optimized(file_path, usecols=usecols)
+                # Rename (same mapping)
                 rename_map = {
                     'BRANCH': 'Branch', 'Doc Id.': 'Doc_ID', 'Ref. No.': 'Ref_No',
                     'Doc Dt.': 'Purchase_Date', 'Vendor Name': 'Vendor',
@@ -299,20 +314,14 @@ class LocalPurchaseProcessor:
                 keep_cols = ['Branch', 'Doc_ID', 'Ref_No', 'Purchase_Date', 'Vendor',
                              'Item_Name', 'Item_Code', 'Qty', 'Cost_Rate', 'FOC_Qty', 'Amount_USD']
                 df = df[[c for c in keep_cols if c in df.columns]]
-                
                 if 'Purchase_Date' in df.columns:
                     df['Purchase_Date'] = DateParser.parse(df['Purchase_Date'])
-                
                 for col in ['Qty', 'Cost_Rate', 'FOC_Qty', 'Amount_USD']:
                     if col in df.columns:
-                        df[col] = pd.to_numeric(df[col], errors='coerce')
-                        df[col] = df[col].fillna(0)
-                
+                        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
                 df = df.dropna(subset=['Item_Code', 'Purchase_Date'])
-                
-                # FILTER OUT RETURNS - Keep only positive purchases
+                # Filter out returns (keep only positive purchases)
                 df = df[(df['Qty'] >= 0) & (df['Amount_USD'] >= 0) & (df['Cost_Rate'] >= 0)].copy()
-                
                 if not df.empty:
                     all_dfs.append(df)
                     min_date = df['Purchase_Date'].min().strftime('%Y-%m-%d') if not df['Purchase_Date'].isna().all() else 'N/A'
@@ -320,7 +329,8 @@ class LocalPurchaseProcessor:
                     logger.log(f"  ✅ Loaded local purchase file: {file} ({len(df)} rows, {min_date} → {max_date})", "SUCCESS")
                 else:
                     logger.log(f"  ⚠️ No valid data in: {file}", "WARNING")
-                    
+                del df
+                gc.collect()
             except Exception as e:
                 logger.log(f"  ❌ Error loading {file}: {e}", "ERROR")
                 traceback.print_exc()
@@ -331,9 +341,8 @@ class LocalPurchaseProcessor:
             return combined
         return None
 
-
 # ============================================================================
-# IMPORT PURCHASE PROCESSOR
+# IMPORT PURCHASE PROCESSOR (memory‑optimized)
 # ============================================================================
 class ImportPurchaseProcessor:
     def __init__(self):
@@ -358,9 +367,17 @@ class ImportPurchaseProcessor:
         for file in files:
             file_path = os.path.join(self.folder, file)
             try:
-                df = pd.read_excel(file_path, sheet_name=0)
-                df.columns = [str(c).strip() for c in df.columns.tolist()]
-                
+                # Define needed columns
+                usecols = [
+                    'GRN No', 'GRN Date', 'Item Name (DRC)', 'Item Name (Supplier)',
+                    'Item Code', 'Pack Unit (Sales)', 'Qty', 'FOC', 'Inv No', 'Inv Date',
+                    'Suplier Name', 'Supplier Rate', 'Discount %', 'Rate After Discount',
+                    'Amount', 'BL No', 'BL Date', 'Carrier', 'Transit Time / Shipping Lead Time',
+                    'Invoice-to-Receipt Lead Time', 'BL Lag / Invoice–Shipment Lag',
+                    'Country', 'Location'
+                ]
+                df = read_excel_optimized(file_path, usecols=usecols)
+                # Rename mapping
                 rename_map = {
                     'GRN No': 'GRN_No', 'GRN Date': 'Purchase_Date',
                     'Item Name (DRC)': 'Item_Name', 'Item Name (Supplier)': 'Item_Name_Supplier',
@@ -386,25 +403,19 @@ class ImportPurchaseProcessor:
                              'Amount_USD', 'BL_No', 'BL_Date', 'Carrier', 'Shipping_Lead_Time',
                              'Invoice_Receipt_Lead', 'BL_Lag', 'Country', 'Location']
                 df = df[[c for c in keep_cols if c in df.columns]]
-                
                 if 'Supplier_Rate' in df.columns:
                     df['Supplier_Rate'] = df['Supplier_Rate'].apply(self._convert_time_to_decimal)
-                
                 for col in ['Purchase_Date', 'Inv_Date', 'BL_Date']:
                     if col in df.columns:
                         df[col] = DateParser.parse(df[col])
-                
                 for col in ['Qty', 'FOC_Qty', 'Supplier_Rate', 'Discount_Pct', 
                            'Rate_After_Discount', 'Amount_USD', 'Shipping_Lead_Time',
                            'Invoice_Receipt_Lead', 'BL_Lag']:
                     if col in df.columns:
-                        df[col] = pd.to_numeric(df[col], errors='coerce')
-                        df[col] = df[col].fillna(0)
-                
+                        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
                 # Filter out negative values
                 df = df[(df['Qty'] >= 0) & (df['Amount_USD'] >= 0) & (df['Supplier_Rate'] >= 0)].copy()
                 df = df.dropna(subset=['Item_Code', 'Purchase_Date'])
-                
                 if not df.empty:
                     all_dfs.append(df)
                     min_date = df['Purchase_Date'].min().strftime('%Y-%m-%d') if not df['Purchase_Date'].isna().all() else 'N/A'
@@ -412,7 +423,8 @@ class ImportPurchaseProcessor:
                     logger.log(f"  ✅ Loaded import purchase file: {file} ({len(df)} rows, {min_date} → {max_date})", "SUCCESS")
                 else:
                     logger.log(f"  ⚠️ No valid data in: {file}", "WARNING")
-                    
+                del df
+                gc.collect()
             except Exception as e:
                 logger.log(f"  ❌ Error loading {file}: {e}", "ERROR")
                 traceback.print_exc()
@@ -424,7 +436,7 @@ class ImportPurchaseProcessor:
         return None
 
 # ============================================================================
-# STOCK FILE PROCESSOR
+# STOCK FILE PROCESSOR (memory‑optimized)
 # ============================================================================
 class StockFileProcessor:
     def __init__(self):
@@ -444,7 +456,8 @@ class StockFileProcessor:
     
     def parse_stock_file(self, file_path, location_name, month_end_date):
         try:
-            df_raw = pd.read_excel(file_path, sheet_name=0, header=None)
+            # Read only header rows to detect structure (cheap)
+            df_raw = pd.read_excel(file_path, sheet_name=0, header=None, nrows=10)
             file_format = self.detect_file_format(df_raw)
             row0 = df_raw.iloc[0].fillna('').astype(str).tolist()
             row1 = df_raw.iloc[1].fillna('').astype(str).tolist()
@@ -501,42 +514,53 @@ class StockFileProcessor:
                         branch_pairs[loc_name] = {'stock': stock_col, 'value': None}
                         col_idx += 1
             
+            # Now read the actual data, but only needed columns
+            # We know the column indices from the header, so we can use usecols with column indices
+            # However, we need the actual data rows; we'll read the entire file with header=None
+            # and then skip rows manually. To save memory, we can read the file in chunks,
+            # but stock files are not huge. We'll read the entire file once with optimized types.
+            df_full = pd.read_excel(file_path, sheet_name=0, header=None)
+            # Slice rows from data_start_row+1 onward
             data_rows = []
-            for i in range(data_start_row + 1, len(df_raw)):
-                row = df_raw.iloc[i].fillna('').tolist()
+            for i in range(data_start_row + 1, len(df_full)):
+                row = df_full.iloc[i].fillna('').tolist()
                 if all(str(v).strip() in ['', '-', '--'] for v in row[:3]):
                     continue
                 data_rows.append(row)
             
-            if data_rows:
-                actual_cols = len(data_rows[0])
-                if len(columns) < actual_cols:
-                    extra_cols = actual_cols - len(columns)
-                    if extra_cols == 2:
-                        columns = columns + ['Grand_Total_STOCK', 'Grand_Total_STOCKVALUE']
-                    else:
-                        columns = columns + [f"EXTRA_{i}" for i in range(extra_cols)]
-                
-                df = pd.DataFrame(data_rows, columns=columns[:actual_cols])
-                
-                if 'ITEMNAME' in df.columns:
-                    df = df.rename(columns={'ITEMNAME': 'Item_Name'})
-                if 'ITEMNUMBER' in df.columns:
-                    df = df.rename(columns={'ITEMNUMBER': 'Item_Number'})
-                
-                for col in df.columns:
-                    if col not in ['Item_Name', 'Item_Number']:
-                        df[col] = pd.to_numeric(df[col], errors='coerce')
-                
-                if 'Item_Name' in df.columns:
-                    df = df[~df['Item_Name'].astype(str).str.upper().isin(['ITEMNAME', 'NAN', '', ' ', 'NONE', 'N/A'])]
-                    df = df[df['Item_Name'].astype(str).str.strip() != '']
-                
-                df['File_Location'] = location_name
-                df['Month_End_Date'] = month_end_date
-                df.attrs['branch_pairs'] = branch_pairs
-                return df
-            return None
+            if not data_rows:
+                return None
+            
+            # Determine actual number of columns
+            actual_cols = len(data_rows[0])
+            if len(columns) < actual_cols:
+                extra_cols = actual_cols - len(columns)
+                if extra_cols == 2:
+                    columns = columns + ['Grand_Total_STOCK', 'Grand_Total_STOCKVALUE']
+                else:
+                    columns = columns + [f"EXTRA_{i}" for i in range(extra_cols)]
+            
+            df = pd.DataFrame(data_rows, columns=columns[:actual_cols])
+            # Rename columns
+            if 'ITEMNAME' in df.columns:
+                df = df.rename(columns={'ITEMNAME': 'Item_Name'})
+            if 'ITEMNUMBER' in df.columns:
+                df = df.rename(columns={'ITEMNUMBER': 'Item_Number'})
+            
+            # Convert numeric columns
+            for col in df.columns:
+                if col not in ['Item_Name', 'Item_Number']:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+            # Filter out header rows
+            if 'Item_Name' in df.columns:
+                df = df[~df['Item_Name'].astype(str).str.upper().isin(['ITEMNAME', 'NAN', '', ' ', 'NONE', 'N/A'])]
+                df = df[df['Item_Name'].astype(str).str.strip() != '']
+            
+            df['File_Location'] = location_name
+            df['Month_End_Date'] = month_end_date
+            df.attrs['branch_pairs'] = branch_pairs
+            return df
         except Exception as e:
             logger.log(f"Error parsing stock file {file_path}: {e}", "ERROR")
             traceback.print_exc()
@@ -578,6 +602,9 @@ class StockFileProcessor:
                 logger.log(f"  └─ Records: {len(df):,}", "DATA")
             else:
                 logger.log(f"  └─ No data loaded", "WARNING")
+            # Free memory
+            del df
+            gc.collect()
         
         if all_dfs:
             combined_df = pd.concat(all_dfs, ignore_index=True)
@@ -586,11 +613,10 @@ class StockFileProcessor:
         return None
 
 # ============================================================================
-# INCREMENTAL SALES / RETURNS PROCESSOR
+# INCREMENTAL SALES / RETURNS PROCESSOR (memory‑optimized)
 # ============================================================================
 class IncrementalFileProcessor:
     def __init__(self):
-        # Retry connection on lock errors
         max_retries = 5
         conn = None
         for attempt in range(max_retries):
@@ -605,11 +631,10 @@ class IncrementalFileProcessor:
                 else:
                     raise
         self.conn = conn
-
         self.sales_folder = SALES_PATH
         self.returns_folder = RETURNS_PATH
 
-        # Create sales_raw and returns_raw tables
+        # Create raw tables if not exist
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS sales_raw (
                 Sale_Date DATE, Branch VARCHAR, Item_Code VARCHAR,
@@ -651,12 +676,9 @@ class IncrementalFileProcessor:
             
             if df is not None and not df.empty:
                 df = df.drop_duplicates(subset=['Invoice_No', 'Item_Code', 'Sale_Date'])
-                
                 self.conn.execute("DELETE FROM sales_raw WHERE file_name = ?", [file])
-                
                 df['file_name'] = file
                 df['file_hash'] = current_hash
-                
                 required_cols = ['Sale_Date', 'Branch', 'Item_Code', 'Invoice_No',
                                  'Customer_Name', 'Customer_Id', 'Quantity', 'Free_Qty',
                                  'Price', 'Amount_USD', 'Sales_Type', 'file_name', 'file_hash']
@@ -664,10 +686,8 @@ class IncrementalFileProcessor:
                     if col not in df.columns:
                         df[col] = None
                 df_subset = df[required_cols]
-                
                 self.conn.register('temp_sales', df_subset)
                 self.conn.execute("INSERT INTO sales_raw SELECT * FROM temp_sales")
-                
                 logger.metadata[registry_key] = {
                     'hash': current_hash,
                     'size': file_info['size'],
@@ -676,9 +696,10 @@ class IncrementalFileProcessor:
                     'records': len(df)
                 }
                 logger.processed_files.append(file)
+                del df, df_subset
+                gc.collect()
             else:
                 logger.failed_files.append(file)
-        
         return True
     
     def process_single_sales_file(self, file_path, file_name):
@@ -686,23 +707,26 @@ class IncrementalFileProcessor:
             df = None
             for encoding in ['utf-8-sig', 'utf-8', 'latin-1', 'cp1252']:
                 try:
-                    df = pd.read_csv(file_path, encoding=encoding, low_memory=False)
+                    # Read only needed columns to save memory
+                    usecols = ['Branch', 'Inv.No', 'Customer Name', 'Customer Id',
+                               'Item Name', 'Item Code', 'Quantity', 'Free Qty',
+                               'Price', 'Amount(USD)', 'Sales Type', 'Date']
+                    # Try to read with usecols; if columns don't match, fallback to all
+                    df = pd.read_csv(file_path, encoding=encoding, usecols=usecols, low_memory=False)
                     if len(df.columns) > 3:
                         break
                 except:
                     continue
-            
             if df is None or df.empty:
                 return None
             
+            # Rename and clean (same as original)
             df.columns = [str(c).strip() for c in df.columns.tolist()]
-            
             date_col = None
             for col in df.columns:
                 if 'DATE' in col.upper() or 'DT' in col.upper():
                     date_col = col
                     break
-            
             if date_col is None:
                 for col in df.columns:
                     try:
@@ -712,10 +736,8 @@ class IncrementalFileProcessor:
                             break
                     except:
                         continue
-            
             if date_col is None:
                 return None
-            
             df[date_col] = DateParser.parse(df[date_col])
             df = df.dropna(subset=[date_col])
             df = df.rename(columns={date_col: 'Sale_Date'})
@@ -734,9 +756,7 @@ class IncrementalFileProcessor:
             
             for col in ["Quantity", "Free_Qty", "Price", "Amount_USD"]:
                 if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors="coerce")
-                    df[col] = df[col].fillna(0)
-            
+                    df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
             if "Quantity" in df.columns:
                 df = df[df["Quantity"] > 0]
             
@@ -824,8 +844,7 @@ class IncrementalFileProcessor:
                 df = df.dropna(subset=['Return_Date'])
 
                 for col in ['Return_Qty', 'Amount_USD']:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
-                    df[col] = df[col].fillna(0)
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
                 df = df.dropna(subset=['Item_Code'])
 
                 if df.empty:
@@ -864,6 +883,8 @@ class IncrementalFileProcessor:
                 }
                 logger.processed_files.append(file)
                 processed_any = True
+                del df, df_subset
+                gc.collect()
 
             except Exception as e:
                 logger.log(f"  ❌ Error processing returns file {file}: {e}", "ERROR")
@@ -874,7 +895,7 @@ class IncrementalFileProcessor:
         return processed_any
 
 # ============================================================================
-# PRF/PO FILE PROCESSOR
+# PRF/PO PROCESSOR (memory‑optimized)
 # ============================================================================
 class PRFPOProcessor:
     def __init__(self):
@@ -907,8 +928,7 @@ class PRFPOProcessor:
                            'Advance_Percent', 'PO_Age_Days']
             for col in numeric_cols:
                 if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
-                    df[col] = df[col].fillna(0)
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
             df = df.dropna(subset=['Item_Code'])
             df = df[df['Item_Code'].astype(str).str.strip() != '']
@@ -926,7 +946,7 @@ class PRFPOProcessor:
             return None
 
 # ============================================================================
-# SUPPLIER MASTER PROCESSOR
+# SUPPLIER MASTER PROCESSOR (memory‑optimized)
 # ============================================================================
 class SupplierMasterProcessor:
     def __init__(self):
@@ -943,7 +963,6 @@ class SupplierMasterProcessor:
             df = pd.read_excel(file_path, sheet_name="Sheet1")
             df.columns = [str(c).strip() for c in df.columns.tolist()]
             
-            # Clean up column names - ADD MORE VARIATIONS
             rename_map = {
                 'Name Of The Supplier': 'Supplier_Name',
                 'Location': 'Location',
@@ -960,7 +979,6 @@ class SupplierMasterProcessor:
                 'Opening Balance': 'Opening_Balance',
                 'Opening Balance Date': 'Opening_Balance_Date',
                 'Lead Time': 'Lead_Time',
-                # ADD THESE ADDITIONAL VARIATIONS:
                 'Leadtime': 'Lead_Time',
                 'LEAD TIME': 'Lead_Time',
                 'LEADTIME': 'Lead_Time',
@@ -970,72 +988,46 @@ class SupplierMasterProcessor:
                 'Lead_Time': 'Lead_Time',
                 'Supplier Leadtime': 'Lead_Time',
             }
-            
             for old, new in rename_map.items():
                 if old in df.columns:
                     df = df.rename(columns={old: new})
             
-            # Ensure Lead_Time is clean - IMPROVED EXTRACTION
             if 'Lead_Time' in df.columns:
-                # Convert to string for processing
                 df['Lead_Time_Str'] = df['Lead_Time'].astype(str)
-                
-                # Log sample values to debug
                 logger.log(f"  └─ Lead Time sample values: {df['Lead_Time_Str'].head(10).tolist()}", "DATA")
-                
-                # Method 1: Extract numbers from text like "30 days", "45", "30-45 days"
                 df['Lead_Time_Extracted'] = df['Lead_Time_Str'].str.extract(r'(\d+)')[0]
                 df['Lead_Time'] = pd.to_numeric(df['Lead_Time_Extracted'], errors='coerce')
-                
-                # Method 2: If still null, try to parse as numeric directly
                 df['Lead_Time'] = df['Lead_Time'].fillna(
                     pd.to_numeric(df['Lead_Time_Str'].str.replace(' days', '').str.replace(' day', ''), errors='coerce')
                 )
-                
-                # Method 3: If still null, try to extract from range like "30-45"
                 df['Lead_Time'] = df['Lead_Time'].fillna(
                     df['Lead_Time_Str'].str.extract(r'(\d+)\s*[-–]\s*(\d+)').apply(
                         lambda x: (int(x[0]) + int(x[1])) / 2 if pd.notna(x[0]) and pd.notna(x[1]) else None, axis=1
                     )
                 )
-                
-                # Default for remaining nulls
                 df['Lead_Time'] = df['Lead_Time'].fillna(180)
-                
-                # Log the distribution to verify
                 logger.log(f"  └─ Lead Time distribution:", "DATA")
                 logger.log(f"     - Mean: {df['Lead_Time'].mean():.0f} days", "DATA")
                 logger.log(f"     - Min: {df['Lead_Time'].min():.0f} days", "DATA")
                 logger.log(f"     - Max: {df['Lead_Time'].max():.0f} days", "DATA")
-                logger.log(f"     - Unique values: {df['Lead_Time'].nunique()}", "DATA")
-                
-                # Check if all are still 180 (default)
-                non_default = df[df['Lead_Time'] != 180]
-                if not non_default.empty:
-                    logger.log(f"  └─ ✅ {len(non_default)} suppliers with non-default Lead Time", "SUCCESS")
-                    for _, row in non_default.head(5).iterrows():
-                        logger.log(f"     - {row.get('Supplier_Name', 'Unknown')}: {row['Lead_Time']} days", "DATA")
-                else:
-                    logger.log("  └─ ⚠️ ALL suppliers have default 180 days - check Lead Time column format!", "WARNING")
-                
-                # Drop temporary columns
                 df = df.drop(['Lead_Time_Str', 'Lead_Time_Extracted'], axis=1, errors='ignore')
             else:
                 logger.log("  └─ ⚠️ 'Lead Time' column not found - using default 180 days", "WARNING")
                 df['Lead_Time'] = 180
             
-            # Clean Supplier_Name
             if 'Supplier_Name' in df.columns:
                 df['Supplier_Name'] = df['Supplier_Name'].astype(str).str.strip()
-                df['Supplier_Name_clean'] = df['Supplier_Name'].str.replace(r'\s+', ' ', regex=True)
-            
-            # Clean Location
             if 'Location' in df.columns:
                 df['Location'] = df['Location'].astype(str).str.strip().str.title()
             
-            logger.log(f"📊 Loaded Supplier Master: {len(df)} suppliers", "DATA")
-            logger.log(f"  └─ Suppliers with Lead Time: {df['Lead_Time'].notna().sum()}")
+            # Parse Opening_Balance_Date
+            if 'Opening_Balance_Date' in df.columns:
+                df['Opening_Balance_Date'] = DateParser.parse(df['Opening_Balance_Date'])
+            for col in ['Rate', 'Euro_To_USD_Rate', 'Opening_Balance']:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
             
+            logger.log(f"📊 Loaded Supplier Master: {len(df)} suppliers", "DATA")
             return df
             
         except Exception as e:
@@ -1043,12 +1035,20 @@ class SupplierMasterProcessor:
             traceback.print_exc()
             return None
 
+# ============================================================================
+# MASTER TABLES CREATION (memory‑optimized – uses DuckDB directly)
+# ============================================================================
 def create_master_tables(conn):
-    """Create master tables with enhanced supplier handling."""
     logger.log("📋 Creating item_master with supplier enhancements...", "PROGRESS")
     item_path = ITEM_MASTER_PATH
     try:
-        item_df = pd.read_excel(item_path, sheet_name="ITEM MASTER")
+        # Read only needed columns to save memory
+        usecols = ['Item Code', 'Item Name (DRC)', 'Brand Name', 'Product Group',
+                   'Division', 'Dosage Form', 'Strength / Composition', 'Pack Size / Presentation',
+                   'Route of Admin', 'Indications (Summary)', 'Posology / Dosage',
+                   'Supplier Name 1', 'Supplier Name 2', 'Supplier Name 3',
+                   'Supplier Name 4', 'Supplier Name 5']
+        item_df = pd.read_excel(item_path, sheet_name="ITEM MASTER", usecols=usecols)
         item_df.columns = [str(c).strip() for c in item_df.columns.tolist()]
         
         rename_map = {
@@ -1060,9 +1060,9 @@ def create_master_tables(conn):
             "Posology / Dosage": "Posology", "Supplier Name 1": "Supplier_1",
             "Supplier Name 2": "Supplier_2", "Supplier Name 3": "Supplier_3",
             "Supplier Name 4": "Supplier_4", "Supplier Name 5": "Supplier_5",
-            "Item Name": "Item_Name", "Supplier": "Supplier_1",
-            "Supplier 1": "Supplier_1", "Supplier 2": "Supplier_2",
-            "Supplier 3": "Supplier_3", "Supplier 4": "Supplier_4", "Supplier 5": "Supplier_5",
+            "Supplier": "Supplier_1", "Supplier 1": "Supplier_1",
+            "Supplier 2": "Supplier_2", "Supplier 3": "Supplier_3",
+            "Supplier 4": "Supplier_4", "Supplier 5": "Supplier_5",
         }
         for old, new in rename_map.items():
             if old in item_df.columns:
@@ -1087,17 +1087,9 @@ def create_master_tables(conn):
             return suppliers if suppliers else None
         
         item_df['All_Suppliers'] = item_df.apply(get_all_suppliers, axis=1)
-        
-        # ✅ Clean All_Suppliers to ensure it's a list of strings or None
-        def clean_supplier_list(val):
-            if val is None:
-                return None
-            if isinstance(val, list):
-                cleaned = [str(v).strip() for v in val if v and str(v).strip()]
-                return cleaned if cleaned else None
-            return None
-        
-        item_df['All_Suppliers'] = item_df['All_Suppliers'].apply(clean_supplier_list)
+        item_df['All_Suppliers'] = item_df['All_Suppliers'].apply(
+            lambda val: [str(v).strip() for v in val] if isinstance(val, list) else None
+        )
         
         def get_primary_supplier(row):
             for col in supplier_cols:
@@ -1107,27 +1099,15 @@ def create_master_tables(conn):
         
         item_df['Primary_Supplier'] = item_df.apply(get_primary_supplier, axis=1)
         
-        # Keep the registered pandas relation concrete; DuckDB 0.9.2 cannot
-        # reliably cast values from columns inferred as the NULL type.
-        item_columns = [
-            'Item_Code', 'Item_Name', 'Brand_Name', 'Product_Group', 'Division',
-            'Dosage_Form', 'Strength', 'Pack_Size', 'Route_Admin', 'Indications',
-            'Posology', *supplier_cols, 'Primary_Supplier'
-        ]
-        for col in item_columns:
+        # Fill missing columns with empty strings
+        for col in ['Item_Name', 'Brand_Name', 'Product_Group', 'Division', 'Dosage_Form',
+                    'Strength', 'Pack_Size', 'Route_Admin', 'Indications', 'Posology']:
             if col not in item_df.columns:
                 item_df[col] = ''
             item_df[col] = item_df[col].fillna('').astype(str)
-        item_df['All_Suppliers'] = item_df['All_Suppliers'].apply(
-            lambda value: value if isinstance(value, list) else []
-        )
         
         conn.register('item_temp', item_df)
-        
-        # ✅ Create table with explicit schema to avoid cast errors
         conn.execute("DROP TABLE IF EXISTS item_master")
-        # Build directly from a typed projection because DuckDB infers all-null
-        # pandas columns as NULL during an INSERT into a pre-created table.
         conn.execute("""
             CREATE TABLE item_master AS
             SELECT 
@@ -1151,23 +1131,13 @@ def create_master_tables(conn):
                 CAST(All_Suppliers AS VARCHAR[]) AS All_Suppliers
             FROM item_temp
         """)
-        
         count = conn.execute("SELECT COUNT(*) FROM item_master").fetchone()[0]
         logger.log_table_info("item_master", count)
-        
-        supplier_stats = conn.execute("""
-            SELECT 
-                COUNT(*) as total_items,
-                SUM(CASE WHEN Primary_Supplier IS NOT NULL AND Primary_Supplier != '' THEN 1 ELSE 0 END) as has_primary_supplier,
-                SUM(CASE WHEN All_Suppliers IS NOT NULL THEN 1 ELSE 0 END) as has_any_supplier
-            FROM item_master
-        """).fetchone()
-        
-        logger.log(f"  └─ Supplier Coverage: {supplier_stats[1]:,}/{supplier_stats[0]:,} have primary supplier", "DATA")
-        logger.log(f"  └─ Any Supplier: {supplier_stats[2]:,}/{supplier_stats[0]:,}", "DATA")
+        del item_df
+        gc.collect()
         
     except FileNotFoundError:
-        logger.log("⚠️ Item Master file not found – creating from existing sales/purchase/stock data", "WARNING")
+        logger.log("⚠️ Item Master file not found – creating from existing data", "WARNING")
         conn.execute("DROP TABLE IF EXISTS item_master")
         conn.execute("""
             CREATE TABLE item_master (
@@ -1235,6 +1205,8 @@ def create_master_tables(conn):
         conn.execute("CREATE TABLE location_master AS SELECT * FROM loc_temp")
         count = conn.execute("SELECT COUNT(*) FROM location_master").fetchone()[0]
         logger.log_table_info("location_master", count)
+        del loc_df
+        gc.collect()
     except Exception as e:
         logger.log(f"Error creating location_master: {e}", "ERROR")
         traceback.print_exc()

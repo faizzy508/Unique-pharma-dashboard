@@ -1,5 +1,5 @@
 """
-PHARMA BI - COMPLETE MIGRATION SCRIPT (FOC OPTIMISED - FIXED)
+PHARMA BI - COMPLETE MIGRATION SCRIPT (FOC OPTIMISED)
 Reads all data files, inserts into DuckDB, and builds all tables.
 Includes Supplier Master, Safety Stock, FOC, and Supplier‑enriched tables.
 """
@@ -50,7 +50,7 @@ Path(RETURNS_PATH).mkdir(parents=True, exist_ok=True)
 Path(PRF_PO_PATH).mkdir(parents=True, exist_ok=True)
 
 # ============================================================================
-# LOGGING SYSTEM
+# LOGGING SYSTEM (unchanged)
 # ============================================================================
 class AdvancedLogger:
     def __init__(self):
@@ -165,7 +165,7 @@ class AdvancedLogger:
 logger = AdvancedLogger()
 
 # ============================================================================
-# DATE PARSER
+# DATE PARSER (unchanged)
 # ============================================================================
 class DateParser:
     @staticmethod
@@ -226,7 +226,7 @@ class PurchaseReturnProcessor:
                     'Cost Rate': 'Cost_Rate', 'Unit Price': 'Cost_Rate',
                     'FOC Qty': 'FOC_Qty', 'Rate-USD': 'Rate_USD',
                     'Amount-USD': 'Amount_USD', 'Amount_USD': 'Amount_USD',
-                    'Amount': 'Amount_USD',
+                    'Amount': 'Amount_USD',  # fallback
                     'Purchase Qty': 'Qty', 'FOC': 'FOC_Qty',
                 }
                 for old, new in rename_map.items():
@@ -268,7 +268,7 @@ class PurchaseReturnProcessor:
         return None
 
 # ============================================================================
-# LOCAL PURCHASE PROCESSOR
+# LOCAL PURCHASE PROCESSOR (unchanged)
 # ============================================================================
 class LocalPurchaseProcessor:
     def __init__(self):
@@ -296,7 +296,7 @@ class LocalPurchaseProcessor:
                     'Cost Rate': 'Cost_Rate', 'Unit Price': 'Cost_Rate',
                     'FOC Qty': 'FOC_Qty', 'Rate-USD': 'Rate_USD',
                     'Amount-USD': 'Amount_USD', 'Amount_USD': 'Amount_USD',
-                    'Amount': 'Amount_USD',
+                    'Amount': 'Amount_USD',  # fallback
                     'Purchase Qty': 'Qty', 'FOC': 'FOC_Qty',
                 }
                 for old, new in rename_map.items():
@@ -315,8 +315,6 @@ class LocalPurchaseProcessor:
                         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
                 
                 df = df.dropna(subset=['Item_Code', 'Purchase_Date'])
-                
-                # Filter out returns (keep only positive purchases)
                 df = df[(df['Qty'] >= 0) & (df['Amount_USD'] >= 0) & (df['Cost_Rate'] >= 0)].copy()
                 
                 if not df.empty:
@@ -339,7 +337,7 @@ class LocalPurchaseProcessor:
         return None
 
 # ============================================================================
-# IMPORT PURCHASE PROCESSOR
+# IMPORT PURCHASE PROCESSOR (unchanged)
 # ============================================================================
 class ImportPurchaseProcessor:
     def __init__(self):
@@ -424,7 +422,7 @@ class ImportPurchaseProcessor:
         return None
 
 # ============================================================================
-# STOCK FILE PROCESSOR
+# STOCK FILE PROCESSOR (unchanged)
 # ============================================================================
 class StockFileProcessor:
     def __init__(self):
@@ -589,7 +587,7 @@ class StockFileProcessor:
         return None
 
 # ============================================================================
-# INCREMENTAL SALES / RETURNS PROCESSOR
+# INCREMENTAL SALES / RETURNS PROCESSOR (unchanged)
 # ============================================================================
 class IncrementalFileProcessor:
     def __init__(self):
@@ -864,7 +862,7 @@ class IncrementalFileProcessor:
         return processed_any
 
 # ============================================================================
-# PRF/PO PROCESSOR
+# PRF/PO PROCESSOR (unchanged)
 # ============================================================================
 class PRFPOProcessor:
     def __init__(self):
@@ -915,7 +913,7 @@ class PRFPOProcessor:
             return None
 
 # ============================================================================
-# SUPPLIER MASTER PROCESSOR
+# SUPPLIER MASTER PROCESSOR (unchanged)
 # ============================================================================
 class SupplierMasterProcessor:
     def __init__(self):
@@ -1004,7 +1002,7 @@ class SupplierMasterProcessor:
             return None
 
 # ============================================================================
-# MASTER TABLES CREATION
+# MASTER TABLES CREATION (unchanged)
 # ============================================================================
 def create_master_tables(conn):
     logger.log("📋 Creating item_master with supplier enhancements...", "PROGRESS")
@@ -1061,6 +1059,7 @@ def create_master_tables(conn):
         
         df['Primary_Supplier'] = df.apply(get_primary_supplier, axis=1)
         
+        # FIX: fill nulls
         for col in ['Item_Name', 'Brand_Name', 'Product_Group', 'Division', 'Dosage_Form',
                     'Strength', 'Pack_Size', 'Route_Admin', 'Indications', 'Posology']:
             if col not in df.columns:
@@ -1196,11 +1195,15 @@ def create_master_tables(conn):
 def rebuild_aggregated_tables(conn):
     logger.log("🔄 Rebuilding aggregated tables from raw data (memory-optimised)...", "PROGRESS")
     
+    # Set temp directory for disk spilling
     conn.execute("PRAGMA temp_directory='/tmp'")
+    # Do NOT reset memory limit here; keep the global 4GB limit
     
+    # Drop tables if exist
     conn.execute("DROP TABLE IF EXISTS aggregated_sales")
     conn.execute("DROP TABLE IF EXISTS aggregated_returns")
     
+    # Create empty aggregated_sales table with proper schema
     conn.execute("""
         CREATE TABLE aggregated_sales (
             Month DATE,
@@ -1216,6 +1219,7 @@ def rebuild_aggregated_tables(conn):
         )
     """)
     
+    # Create empty aggregated_returns table
     conn.execute("""
         CREATE TABLE aggregated_returns (
             Month DATE,
@@ -1230,6 +1234,7 @@ def rebuild_aggregated_tables(conn):
         )
     """)
     
+    # Get distinct months from sales_raw
     months_df = conn.execute("SELECT DISTINCT DATE_TRUNC('month', Sale_Date) as Month FROM sales_raw WHERE Sale_Date IS NOT NULL ORDER BY Month").df()
     if not months_df.empty:
         for month in months_df['Month']:
@@ -1252,7 +1257,11 @@ def rebuild_aggregated_tables(conn):
                   AND Quantity > 0
                 GROUP BY DATE_TRUNC('month', Sale_Date), Branch, Item_Code
             """, [month, month])
+    else:
+        # If no sales data, leave empty
+        pass
     
+    # Get distinct months from returns_raw
     months_df = conn.execute("SELECT DISTINCT DATE_TRUNC('month', Return_Date) as Month FROM returns_raw WHERE Return_Date IS NOT NULL ORDER BY Month").df()
     if not months_df.empty:
         for month in months_df['Month']:
@@ -1274,6 +1283,7 @@ def rebuild_aggregated_tables(conn):
                 GROUP BY DATE_TRUNC('month', Return_Date), Branch, Item_Code
             """, [month, month])
     
+    # Now build dashboard_data using the aggregated tables
     logger.log("📊 Creating materialized dashboard_data table...", "PROGRESS")
     try:
         conn.execute("DROP TABLE IF EXISTS dashboard_data")
@@ -1320,7 +1330,7 @@ def rebuild_aggregated_tables(conn):
     logger.log_table_info("dashboard_data", count)
 
 # ============================================================================
-# FOC SALES AGGREGATION (FIXED - Ambiguous reference error)
+# FOC SALES AGGREGATION (NEW) - PRE-AGGREGATE FOC DATA TO AVOID OOM
 # ============================================================================
 def create_foc_sales_agg(conn):
     logger.log("🎯 Creating pre-aggregated FOC sales table...", "PROGRESS")
@@ -1328,31 +1338,30 @@ def create_foc_sales_agg(conn):
     conn.execute("""
         CREATE TABLE foc_sales_agg AS
         SELECT 
-            DATE_TRUNC('month', sales_raw.Sale_Date) as Month,
-            sales_raw.Branch,
-            sales_raw.Item_Code,
+            DATE_TRUNC('month', Sale_Date) as Month,
+            Branch,
+            Item_Code,
             im.Item_Name,
             im.Product_Group,
             im.Division,
             lm.Location,
-            SUM(sales_raw.Quantity) as Total_Qty,
-            SUM(sales_raw.Free_Qty) as Total_FOC_Qty,
-            SUM(sales_raw.Amount_USD) as Total_Revenue,
-            COUNT(DISTINCT sales_raw.Invoice_No) as Total_Transactions,
-            COUNT(DISTINCT CASE WHEN sales_raw.Free_Qty > 0 THEN sales_raw.Invoice_No END) as FOC_Transactions,
-            COUNT(DISTINCT sales_raw.Customer_Id) as Unique_Customers
+            SUM(Quantity) as Total_Qty,
+            SUM(Free_Qty) as Total_FOC_Qty,
+            SUM(Amount_USD) as Total_Revenue,
+            COUNT(DISTINCT Invoice_No) as Total_Transactions,
+            COUNT(DISTINCT CASE WHEN Free_Qty > 0 THEN Invoice_No END) as FOC_Transactions,
+            COUNT(DISTINCT Customer_Id) as Unique_Customers
         FROM sales_raw
-        LEFT JOIN item_master im ON sales_raw.Item_Code = im.Item_Code
-        LEFT JOIN location_master lm ON sales_raw.Branch = lm.Branch
-        WHERE sales_raw.Quantity > 0 AND sales_raw.Free_Qty >= 0
-        GROUP BY DATE_TRUNC('month', sales_raw.Sale_Date), sales_raw.Branch, sales_raw.Item_Code, 
-                 im.Item_Name, im.Product_Group, im.Division, lm.Location
+        LEFT JOIN item_master im ON Item_Code = im.Item_Code
+        LEFT JOIN location_master lm ON Branch = lm.Branch
+        WHERE Quantity > 0 AND Free_Qty >= 0
+        GROUP BY DATE_TRUNC('month', Sale_Date), Branch, Item_Code, im.Item_Name, im.Product_Group, im.Division, lm.Location
     """)
     count = conn.execute("SELECT COUNT(*) FROM foc_sales_agg").fetchone()[0]
     logger.log_table_info("foc_sales_agg (pre-aggregated)", count)
 
 # ============================================================================
-# PRE-AGGREGATED SUMMARIES
+# PRE-AGGREGATED SUMMARIES (unchanged)
 # ============================================================================
 def create_pre_aggregated_summaries(conn):
     logger.log("📊 Creating pre-aggregated summary tables...", "PROGRESS")
@@ -2320,6 +2329,7 @@ def create_stock_tables(conn, stock_df):
     count = conn.execute("SELECT COUNT(*) FROM stock_out_analysis").fetchone()[0]
     logger.log_table_info("stock_out_analysis", count)
     
+    # Create stock_vs_sales as a VIEW (do NOT count rows now)
     conn.execute("DROP VIEW IF EXISTS stock_vs_sales")
     conn.execute("""
         CREATE VIEW stock_vs_sales AS
@@ -2344,6 +2354,7 @@ def create_stock_tables(conn, stock_df):
             AND DATE_TRUNC('month', s.Month_End_Date) = DATE_TRUNC('month', d.Month)
         WHERE s.Branch_Location IS NOT NULL AND s.Branch_Location != ''
     """)
+    # Do NOT count rows for view (it will be huge and cause OOM)
 
 # ============================================================================
 # STOCK HEALTH DASHBOARD
@@ -2478,8 +2489,7 @@ def create_current_stock_recommendations(conn):
                 CASE 
                     WHEN COALESCE(bas.Branch_Avg_Sales, 0) > 0 
                     THEN (COALESCE(bas.Branch_Avg_Sales, 0) * 2) - cs.Current_Stock
-                    ELSE 0
-                END as Recommended_Order_Qty,
+                    ELSE 0                END as Recommended_Order_Qty,
                 CASE 
                     WHEN cs.Current_Stock = 0 AND COALESCE(bas.Branch_Avg_Sales, 0) > 0 THEN 'CRITICAL - STOCKOUT'
                     WHEN cs.Current_Stock < COALESCE(bas.Branch_Avg_Sales, 0) THEN 'LOW STOCK - ORDER SOON'
@@ -3279,6 +3289,7 @@ def create_safety_stock_tables(conn):
 def create_foc_tables(conn):
     logger.log("🎯 Creating FOC tables from pre-aggregated data...", "PROGRESS")
     
+    # First, check if foc_sales_agg exists, if not, create it
     try:
         conn.execute("SELECT COUNT(*) FROM foc_sales_agg").fetchone()
     except:
@@ -3323,9 +3334,11 @@ def create_foc_tables(conn):
             SUM(Total_FOC_Qty) as Total_FOC_Qty,
             SUM(Total_Qty) - SUM(Total_FOC_Qty) as Paid_Qty,
             SUM(Total_Revenue) as Total_Revenue,
+            SUM(Total_FOC_Qty * 0) as FOC_Revenue_Value, -- placeholder, if needed
             SUM(Total_Transactions) as Total_Transactions,
             SUM(FOC_Transactions) as FOC_Transactions,
-            CASE WHEN SUM(Total_Qty) > 0 THEN ROUND(SUM(Total_FOC_Qty) / SUM(Total_Qty) * 100, 2) ELSE 0 END as FOC_Pct
+            CASE WHEN SUM(Total_Qty) > 0 THEN ROUND(SUM(Total_FOC_Qty) / SUM(Total_Qty) * 100, 2) ELSE 0 END as FOC_Pct,
+            0 as FOC_Value_Pct
         FROM foc_sales_agg
         GROUP BY STRFTIME(Month, '%Y-%m'), EXTRACT(YEAR FROM Month), EXTRACT(MONTH FROM Month), EXTRACT(QUARTER FROM Month)
         ORDER BY Year, Month_Num
@@ -3389,7 +3402,9 @@ def create_foc_tables(conn):
             SUM(Total_Transactions) as Total_Transactions,
             SUM(FOC_Transactions) as FOC_Transactions,
             CASE WHEN SUM(Total_Qty) > 0 THEN ROUND(SUM(Total_FOC_Qty) / SUM(Total_Qty) * 100, 2) ELSE 0 END as FOC_Percentage,
-            SUM(Total_Revenue) as Total_Revenue
+            SUM(Total_Revenue) as Total_Revenue,
+            SUM(Total_FOC_Qty * 0) as FOC_Revenue_Value,
+            0 as FOC_Value_Pct
         FROM foc_sales_agg
         WHERE Product_Group IS NOT NULL AND Product_Group != ''
         GROUP BY Product_Group
@@ -3398,7 +3413,8 @@ def create_foc_tables(conn):
     count = conn.execute("SELECT COUNT(*) FROM foc_sales_by_group").fetchone()[0]
     logger.log_table_info("foc_sales_by_group", count)
     
-    # FOC Outliers – empty table
+    # FOC Outliers – we skip this for now (or we could compute from raw, but skip to save memory)
+    # We'll just create an empty table.
     conn.execute("DROP TABLE IF EXISTS foc_sales_outliers")
     conn.execute("""
         CREATE TABLE foc_sales_outliers (
@@ -3414,7 +3430,7 @@ def create_foc_tables(conn):
     """)
     logger.log_table_info("foc_sales_outliers (empty)", 0)
     
-    # Purchase FOC Summary
+    # Purchase FOC Summary (unchanged)
     conn.execute("DROP TABLE IF EXISTS foc_purchase_summary")
     conn.execute("""
         CREATE TABLE foc_purchase_summary AS
@@ -3571,7 +3587,7 @@ def create_foc_tables(conn):
     count = conn.execute("SELECT COUNT(*) FROM foc_recommendations").fetchone()[0]
     logger.log_table_info("foc_recommendations (view)", count)
     
-    # FOC Demand Impact
+    # FOC Demand Impact (using both sales and purchase aggregated, but we'll use sales only for impact)
     conn.execute("DROP TABLE IF EXISTS foc_demand_impact")
     conn.execute("""
         CREATE TABLE foc_demand_impact AS
@@ -3585,6 +3601,8 @@ def create_foc_tables(conn):
             sm.Total_Qty - COALESCE(fm.Total_FOC_Qty, 0) as Paid_Qty,
             COALESCE(fm.FOC_Pct, 0) as FOC_Pct,
             sm.Total_Sales as Total_Revenue,
+            COALESCE(fm.FOC_Revenue_Value, 0) as FOC_Revenue,
+            COALESCE(fm.FOC_Value_Pct, 0) as FOC_Value_Pct,
             AVG(COALESCE(fm.FOC_Pct, 0)) OVER (ORDER BY sm.Year, sm.Month_Num ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) as FOC_MA_3,
             AVG(COALESCE(fm.FOC_Pct, 0)) OVER (ORDER BY sm.Year, sm.Month_Num ROWS BETWEEN 5 PRECEDING AND CURRENT ROW) as FOC_MA_6
         FROM monthly_summary sm
@@ -3598,7 +3616,7 @@ def create_foc_tables(conn):
     logger.log("✅ FOC tables created successfully!", "SUCCESS")
 
 # ============================================================================
-# SUPPLIER-ENRICHED TABLES
+# SUPPLIER-ENRICHED TABLES (unchanged)
 # ============================================================================
 def create_supplier_enriched_tables(conn):
     logger.log("🏢 Creating SUPPLIER-ENRICHED tables...", "PROGRESS")
@@ -4061,7 +4079,7 @@ def create_supplier_enriched_tables(conn):
         logger.log(f"     - {row['Supplier_Diversity']}: {row['item_count']:,} items", "DATA")
 
 # ============================================================================
-# VALIDATION
+# VALIDATION (SKIP VIEWS TO AVOID OOM)
 # ============================================================================
 def validate_data():
     logger.log("="*80, "INFO", False)
@@ -4069,6 +4087,7 @@ def validate_data():
     logger.log("="*80, "INFO", False)
     conn = duckdb.connect(DB_PATH)
     try:
+        # Get all tables and views
         tables = conn.execute("""
             SELECT table_name, table_type 
             FROM information_schema.tables 
@@ -4076,11 +4095,12 @@ def validate_data():
             ORDER BY table_name
         """).df()
         
-        logger.log("📋 ALL TABLES:", "DATA")
+        logger.log("📋 ALL TABLES (skipping views to save memory):", "DATA")
         for _, row in tables.iterrows():
             table_name = row['table_name']
             table_type = row['table_type']
             
+            # Only count rows for base tables, skip views
             if table_type.upper() == 'VIEW':
                 logger.log(f"  👁️ {table_name} (view) - skipped", "INFO", False)
                 continue
@@ -4091,12 +4111,14 @@ def validate_data():
             except Exception as e:
                 logger.log(f"  ❌ {table_name}: Error - {e}", "WARNING", False)
         
+        # FOC tables (only base tables)
         foc_tables = ['foc_sales_summary', 'foc_sales_monthly', 'foc_purchase_summary', 
                       'foc_purchase_monthly', 'foc_sales_outliers', 'foc_purchase_outliers',
                       'foc_demand_impact', 'foc_sales_by_branch', 'foc_sales_by_group']
         logger.log("🎯 FOC TABLES:", "DATA")
         for table in foc_tables:
             try:
+                # Check if table exists and is a base table
                 exists = conn.execute(f"""
                     SELECT COUNT(*) FROM information_schema.tables 
                     WHERE table_name = '{table}' AND table_type = 'BASE TABLE'
@@ -4109,6 +4131,7 @@ def validate_data():
             except Exception as e:
                 logger.log(f"  ❌ {table}: Error - {e}", "WARNING", False)
         
+        # Safety stock tables
         safety_tables = ['safety_stock_by_supplier', 'safety_stock_by_item', 'safety_stock_summary']
         logger.log("🛡️ SAFETY STOCK TABLES:", "DATA")
         for table in safety_tables:
@@ -4125,6 +4148,7 @@ def validate_data():
             except Exception as e:
                 logger.log(f"  ❌ {table}: Error - {e}", "WARNING", False)
         
+        # Supplier master
         try:
             exists = conn.execute("""
                 SELECT COUNT(*) FROM information_schema.tables 
@@ -4149,7 +4173,7 @@ def validate_data():
 # ============================================================================
 if __name__ == "__main__":
     print("\n" + "="*80)
-    print("💊 PHARMA BI - COMPLETE MIGRATION (FOC OPTIMISED - FIXED)")
+    print("💊 PHARMA BI - COMPLETE MIGRATION (FOC OPTIMISED)")
     print("="*80)
     print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*80)

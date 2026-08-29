@@ -1,5 +1,5 @@
 """
-PHARMA BI - COMPLETE MIGRATION SCRIPT (FOC OPTIMISED, AMBIGUITY FIXED)
+PHARMA BI - COMPLETE MIGRATION SCRIPT (FOC MEMORY FIX)
 Reads all data files, inserts into DuckDB, and builds all tables.
 Includes Supplier Master, Safety Stock, FOC, and Supplier‑enriched tables.
 """
@@ -66,7 +66,7 @@ class AdvancedLogger:
     
     def write_header(self):
         self.log_handle.write("="*100 + "\n")
-        self.log_handle.write("PHARMA BI - COMPLETE MIGRATION LOG (FOC OPTIMISED, AMBIGUITY FIXED)\n")
+        self.log_handle.write("PHARMA BI - COMPLETE MIGRATION LOG (FOC MEMORY FIX)\n")
         self.log_handle.write(f"Started: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
         self.log_handle.write("="*100 + "\n\n")
     
@@ -1330,33 +1330,64 @@ def rebuild_aggregated_tables(conn):
     logger.log_table_info("dashboard_data", count)
 
 # ============================================================================
-# FOC SALES AGGREGATION (FIXED AMBIGUITY)
+# FOC SALES AGGREGATION (MEMORY FIX - MONTH BY MONTH)
 # ============================================================================
 def create_foc_sales_agg(conn):
-    logger.log("🎯 Creating pre-aggregated FOC sales table...", "PROGRESS")
+    logger.log("🎯 Creating pre-aggregated FOC sales table (month-by-month)...", "PROGRESS")
+    
+    # Drop and recreate table with proper schema
     conn.execute("DROP TABLE IF EXISTS foc_sales_agg")
     conn.execute("""
-        CREATE TABLE foc_sales_agg AS
-        SELECT 
-            DATE_TRUNC('month', sales_raw.Sale_Date) as Month,
-            sales_raw.Branch,
-            sales_raw.Item_Code,
-            im.Item_Name,
-            im.Product_Group,
-            im.Division,
-            lm.Location,
-            SUM(sales_raw.Quantity) as Total_Qty,
-            SUM(sales_raw.Free_Qty) as Total_FOC_Qty,
-            SUM(sales_raw.Amount_USD) as Total_Revenue,
-            COUNT(DISTINCT sales_raw.Invoice_No) as Total_Transactions,
-            COUNT(DISTINCT CASE WHEN sales_raw.Free_Qty > 0 THEN sales_raw.Invoice_No END) as FOC_Transactions,
-            COUNT(DISTINCT sales_raw.Customer_Id) as Unique_Customers
-        FROM sales_raw
-        LEFT JOIN item_master im ON sales_raw.Item_Code = im.Item_Code
-        LEFT JOIN location_master lm ON sales_raw.Branch = lm.Branch
-        WHERE sales_raw.Quantity > 0 AND sales_raw.Free_Qty >= 0
-        GROUP BY DATE_TRUNC('month', sales_raw.Sale_Date), sales_raw.Branch, sales_raw.Item_Code, im.Item_Name, im.Product_Group, im.Division, lm.Location
+        CREATE TABLE foc_sales_agg (
+            Month DATE,
+            Branch VARCHAR,
+            Item_Code VARCHAR,
+            Item_Name VARCHAR,
+            Product_Group VARCHAR,
+            Division VARCHAR,
+            Location VARCHAR,
+            Total_Qty DOUBLE,
+            Total_FOC_Qty DOUBLE,
+            Total_Revenue DOUBLE,
+            Total_Transactions INTEGER,
+            FOC_Transactions INTEGER,
+            Unique_Customers INTEGER
+        )
     """)
+    
+    # Get distinct months from sales_raw
+    months_df = conn.execute("SELECT DISTINCT DATE_TRUNC('month', Sale_Date) as Month FROM sales_raw WHERE Sale_Date IS NOT NULL ORDER BY Month").df()
+    if months_df.empty:
+        logger.log("  No sales data found for FOC aggregation", "WARNING")
+        return
+    
+    for month in months_df['Month']:
+        logger.log(f"  Processing FOC aggregation for month: {month.strftime('%Y-%m')}", "PROGRESS")
+        conn.execute("""
+            INSERT INTO foc_sales_agg
+            SELECT 
+                DATE_TRUNC('month', sales_raw.Sale_Date) as Month,
+                sales_raw.Branch,
+                sales_raw.Item_Code,
+                im.Item_Name,
+                im.Product_Group,
+                im.Division,
+                lm.Location,
+                SUM(sales_raw.Quantity) as Total_Qty,
+                SUM(sales_raw.Free_Qty) as Total_FOC_Qty,
+                SUM(sales_raw.Amount_USD) as Total_Revenue,
+                COUNT(DISTINCT sales_raw.Invoice_No) as Total_Transactions,
+                COUNT(DISTINCT CASE WHEN sales_raw.Free_Qty > 0 THEN sales_raw.Invoice_No END) as FOC_Transactions,
+                COUNT(DISTINCT sales_raw.Customer_Id) as Unique_Customers
+            FROM sales_raw
+            LEFT JOIN item_master im ON sales_raw.Item_Code = im.Item_Code
+            LEFT JOIN location_master lm ON sales_raw.Branch = lm.Branch
+            WHERE sales_raw.Sale_Date >= ? AND sales_raw.Sale_Date < ? + INTERVAL '1 month'
+              AND sales_raw.Quantity > 0 AND sales_raw.Free_Qty >= 0
+            GROUP BY DATE_TRUNC('month', sales_raw.Sale_Date), sales_raw.Branch, sales_raw.Item_Code, 
+                     im.Item_Name, im.Product_Group, im.Division, lm.Location
+        """, [month, month])
+    
     count = conn.execute("SELECT COUNT(*) FROM foc_sales_agg").fetchone()[0]
     logger.log_table_info("foc_sales_agg (pre-aggregated)", count)
 
@@ -4173,7 +4204,7 @@ def validate_data():
 # ============================================================================
 if __name__ == "__main__":
     print("\n" + "="*80)
-    print("💊 PHARMA BI - COMPLETE MIGRATION (FOC OPTIMISED, AMBIGUITY FIXED)")
+    print("💊 PHARMA BI - COMPLETE MIGRATION (FOC MEMORY FIX)")
     print("="*80)
     print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*80)
@@ -4219,7 +4250,7 @@ if __name__ == "__main__":
         
         create_master_tables(conn)
         rebuild_aggregated_tables(conn)
-        create_foc_sales_agg(conn)
+        create_foc_sales_agg(conn)          # <-- now month-by-month
         create_pre_aggregated_summaries(conn)
         create_instant_filter_tables(conn)
         create_branch_item_monthly_summary(conn)

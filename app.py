@@ -21,6 +21,51 @@ import sys
 from streamlit.runtime.scriptrunner import get_script_run_ctx
 
 # ============================================================================
+# PAGE CONFIG – MUST BE FIRST STREAMLIT COMMAND
+# ============================================================================
+st.set_page_config(
+    page_title="UNIQUE PHARMA - KINSHASA, GOMA & LUBUMBASHI",
+    page_icon="🏢",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# ============================================================================
+# PATHS & DATABASE CONNECTION (MOVED TO TOP)
+# ============================================================================
+BASE_PATH = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_PATH, "duckdb", "business.db")
+os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+
+class DatabaseConnection:
+    _instance = None
+    _connection = None
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(DatabaseConnection, cls).__new__(cls)
+        return cls._instance
+    def get_connection(self):
+        if self._connection is None:
+            max_retries = 5
+            for attempt in range(max_retries):
+                try:
+                    self._connection = duckdb.connect(DB_PATH)
+                    self._connection.execute("PRAGMA memory_limit='4GB'")
+                    break
+                except duckdb.IOException as e:
+                    if "Resource temporarily unavailable" in str(e) and attempt < max_retries - 1:
+                        time.sleep(1.5)
+                    else:
+                        raise
+        return self._connection
+
+_db = DatabaseConnection()
+
+@st.cache_resource
+def get_connection():
+    return _db.get_connection()
+
+# ============================================================================
 # DATA MASKING SECURITY SWITCH
 # ============================================================================
 def mask_value(value, mask_enabled, format_str=",.0f", prefix="", suffix=""):
@@ -108,7 +153,7 @@ DEFAULT_USERS = {
 
 class UserManager:
     def __init__(self):
-        # Use the same database connection as the rest of the app
+        # Use the global connection
         self.conn = get_connection()
         self._ensure_users_table()
         self._ensure_default_users()
@@ -129,7 +174,6 @@ class UserManager:
         """)
     
     def _ensure_default_users(self):
-        # Check if admin exists; if not, insert defaults
         for username, user_data in DEFAULT_USERS.items():
             exists = self.conn.execute("SELECT 1 FROM users WHERE username = ?", [username]).fetchone()
             if not exists:
@@ -152,7 +196,6 @@ class UserManager:
         row = self.conn.execute("SELECT * FROM users WHERE username = ?", [username]).fetchone()
         if not row:
             return False, None
-        # row is a tuple; map by index or use dict
         user = {
             'username': row[0],
             'password': row[1],
@@ -167,7 +210,6 @@ class UserManager:
         if not user.get('active', True):
             return False, None
         if verify_password(password, user['password']):
-            # Update last_login
             self.conn.execute("UPDATE users SET last_login = ? WHERE username = ?", [datetime.now().isoformat(), username])
             return True, user
         return False, None
@@ -240,6 +282,9 @@ class UserManager:
             })
         return pd.DataFrame(data)
 
+# ============================================================================
+# SESSION MANAGER & PERMISSION MANAGER
+# ============================================================================
 class SessionManager:
     SESSION_EXPIRY_HOURS = 8
     
@@ -332,9 +377,8 @@ class PermissionManager:
         return ["📊 Executive Dashboard", "📈 Sales Analytics", "📦 Stock Analysis"]
 
 # ============================================================================
-# LOGIN UI
+# LOGIN UI (unchanged)
 # ============================================================================
-
 def render_login_page():
     st.markdown("""
     <style>
@@ -615,7 +659,6 @@ def render_user_profile():
             SessionManager.logout()
             st.rerun()
     
-    # ---- ADD THIS SECTION ----
     st.markdown("---")
     if st.button("🏠 Back to Dashboard", use_container_width=True):
         st.session_state.page = "📊 Executive Dashboard"
@@ -655,7 +698,7 @@ def render_admin_panel():
                     st.error("❌ Please fill in all required fields.")
     with col2:
         st.markdown("### 🗑️ Delete User")
-        users_list = list(user_manager.users.keys())
+        users_list = user_manager.list_users()['Username'].tolist() if not user_manager.list_users().empty else []
         users_list = [u for u in users_list if u != 'admin']
         if users_list:
             delete_user = st.selectbox("Select user to delete", users_list)
@@ -668,11 +711,11 @@ def render_admin_panel():
         else:
             st.info("No other users to delete.")
     
-    # ---- ADD THIS SECTION ----
     st.markdown("---")
     if st.button("🏠 Back to Dashboard", use_container_width=True):
         st.session_state.page = "📊 Executive Dashboard"
         st.rerun()
+
 # ============================================================================
 # PAGE CONFIG & SESSION INIT
 # ============================================================================

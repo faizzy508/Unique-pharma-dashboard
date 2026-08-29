@@ -576,6 +576,12 @@ def render_user_profile():
         if st.button("🚪 Sign Out", use_container_width=True):
             SessionManager.logout()
             st.rerun()
+    
+    # ---- ADD THIS SECTION ----
+    st.markdown("---")
+    if st.button("🏠 Back to Dashboard", use_container_width=True):
+        st.session_state.page = "📊 Executive Dashboard"
+        st.rerun()
 
 def render_admin_panel():
     if not SessionManager.is_authenticated():
@@ -623,7 +629,12 @@ def render_admin_panel():
                     st.error("❌ Failed to delete user.")
         else:
             st.info("No other users to delete.")
-
+    
+    # ---- ADD THIS SECTION ----
+    st.markdown("---")
+    if st.button("🏠 Back to Dashboard", use_container_width=True):
+        st.session_state.page = "📊 Executive Dashboard"
+        st.rerun()
 # ============================================================================
 # PAGE CONFIG & SESSION INIT
 # ============================================================================

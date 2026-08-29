@@ -115,6 +115,9 @@ def verify_password(password: str, hashed: str) -> bool:
         salt, hash_val = hashed.split(":")
         combined = salt + password
         return hashlib.sha256(combined.encode()).hexdigest() == hash_val
+    except ValueError:
+        # Fallback for unsalted legacy hashes (e.g., default admin)
+        return hashlib.sha256(password.encode()).hexdigest() == hashed
     except:
         return False
 
@@ -153,7 +156,6 @@ DEFAULT_USERS = {
 
 class UserManager:
     def __init__(self):
-        # Use the global connection
         self.conn = get_connection()
         self._ensure_users_table()
         self._ensure_default_users()
@@ -281,7 +283,6 @@ class UserManager:
                 'Created': row[6]
             })
         return pd.DataFrame(data)
-
 # ============================================================================
 # SESSION MANAGER & PERMISSION MANAGER
 # ============================================================================

@@ -3032,7 +3032,7 @@ def main():
                 if st.session_state.data_masking:
                     fig.update_traces(texttemplate='***', hovertemplate='<b>%{x}</b><br>%{y:,.0f}<extra></extra>')
                 else:
-                    fig.update_traces(texttemplate='%{text:,.0f}', textposition='outside', textfont=dict(size=10))
+                    fig.update_traces(texttemplate='%{y:,.0f}', textposition='outside', textfont=dict(size=10))
                 fig.update_layout(height=350, template='plotly_dark', margin=dict(l=10, r=10, t=40, b=40), xaxis_title='Quarter', yaxis_title=y_label, showlegend=False)
                 st.plotly_chart(fig, use_container_width=True)
         
@@ -3044,7 +3044,7 @@ def main():
                 if st.session_state.data_masking:
                     fig.update_traces(texttemplate='***', hovertemplate='<b>%{y}</b><br>%{x:,.0f}<extra></extra>')
                 else:
-                    fig.update_traces(texttemplate='%{text:,.0f}', textposition='outside', textfont=dict(size=10))
+                    fig.update_traces(texttemplate='%{y:,.0f}', textposition='outside', textfont=dict(size=10))
                 fig.update_layout(height=350, template='plotly_dark', margin=dict(l=10, r=10, t=40, b=20), xaxis_title='Sales ($)', showlegend=False)
                 st.plotly_chart(fig, use_container_width=True)
         with col_chart4:
@@ -3105,7 +3105,7 @@ def main():
                 if st.session_state.data_masking:
                     fig.update_traces(texttemplate='***', hovertemplate='<b>%{y}</b><br>%{x:,.0f}<extra></extra>')
                 else:
-                    fig.update_traces(texttemplate='%{text:,.0f}', textposition='outside', textfont=dict(size=10))
+                    fig.update_traces(texttemplate='%{y:,.0f}', textposition='outside', textfont=dict(size=10))
                 fig.update_layout(height=350, template='plotly_dark', margin=dict(l=10, r=10, t=40, b=20), xaxis_title='Sales' if view_type_label == "💰 Value" else 'Quantity' if view_type_label == "📦 Quantity" else 'Transactions', showlegend=False)
                 st.plotly_chart(fig, use_container_width=True)
         with col_bottom_products:
@@ -3120,7 +3120,7 @@ def main():
                 if st.session_state.data_masking:
                     fig.update_traces(texttemplate='***', hovertemplate='<b>%{y}</b><br>%{x:,.0f}<extra></extra>')
                 else:
-                    fig.update_traces(texttemplate='%{text:,.0f}', textposition='outside', textfont=dict(size=10))
+                    fig.update_traces(texttemplate='%{y:,.0f}', textposition='outside', textfont=dict(size=10))
                 fig.update_layout(height=350, template='plotly_dark', margin=dict(l=10, r=10, t=40, b=20), xaxis_title='Sales' if view_type_label == "💰 Value" else 'Quantity' if view_type_label == "📦 Quantity" else 'Transactions', showlegend=False)
                 st.plotly_chart(fig, use_container_width=True)
 
@@ -3258,7 +3258,7 @@ def main():
                 if st.session_state.data_masking:
                     fig.update_traces(texttemplate='***', hovertemplate='<b>%{x}</b><br>%{y:,.0f}<extra></extra>')
                 else:
-                    fig.update_traces(texttemplate='%{text:,.0f}', textposition='outside', textfont=dict(size=10))
+                    fig.update_traces(texttemplate='%{y:,.0f}', textposition='outside', textfont=dict(size=10))
                 fig.update_layout(title='Top 10 Items by Total Sales', height=400, template='plotly_dark', xaxis={'tickangle': -45}, barmode='group', legend=dict(orientation='h', yanchor='bottom', y=1.02))
                 st.plotly_chart(fig, use_container_width=True)
                 
@@ -3313,7 +3313,7 @@ def main():
                 if st.session_state.data_masking:
                     fig.update_traces(texttemplate='***', hovertemplate='<b>%{x}</b><br>%{y:,.0f}<extra></extra>')
                 else:
-                    fig.update_traces(texttemplate='%{text:,.0f}', textposition='outside', textfont=dict(size=10))
+                    fig.update_traces(texttemplate='%{y:,.0f}', textposition='outside', textfont=dict(size=10))
                 fig.update_layout(height=350, template='plotly_dark', margin=dict(l=10, r=10, t=40, b=30), showlegend=False)
                 st.plotly_chart(fig, use_container_width=True)
         
@@ -3407,7 +3407,7 @@ def main():
                 if st.session_state.data_masking:
                     fig.update_traces(texttemplate='***', hovertemplate='<b>%{x}</b><br>%{y:,.0f}<extra></extra>')
                 else:
-                    fig.update_traces(texttemplate='%{text:,.0f}', textposition='outside', textfont=dict(size=10))
+                    fig.update_traces(texttemplate='%{y:,.0f}', textposition='outside', textfont=dict(size=10))
                 fig.update_layout(title='Top 10 Items by Total Returns', height=400, template='plotly_dark', xaxis={'tickangle': -45}, showlegend=False)
                 st.plotly_chart(fig, use_container_width=True)
                 
@@ -3560,7 +3560,7 @@ def main():
                 if st.session_state.data_masking:
                     fig.update_traces(texttemplate='***', hovertemplate='<b>%{x}</b><br>%{y:,.0f}<extra></extra>')
                 else:
-                    fig.update_traces(texttemplate='%{text:,.0f}', textposition='outside', textfont=dict(size=10))
+                    fig.update_traces(texttemplate='%{y:,.0f}', textposition='outside', textfont=dict(size=10))
                 fig.update_layout(title='Top 10 Items by Total Net Sales', height=400, template='plotly_dark', xaxis={'tickangle': -45}, showlegend=False)
                 st.plotly_chart(fig, use_container_width=True)
                 
@@ -6542,7 +6542,7 @@ def main():
             if st.session_state.data_masking:
                 fig.update_traces(texttemplate='***', hovertemplate='<b>%{x}</b><br>%{y:,.0f}<extra></extra>')
             else:
-                fig.update_traces(texttemplate='%{text:,.0f}', textposition='outside', textfont=dict(size=10))
+                fig.update_traces(texttemplate='%{y:,.0f}', textposition='outside', textfont=dict(size=10))
             fig.update_layout(height=400, template='plotly_dark', margin=dict(l=10,r=10,t=40,b=60), xaxis={'tickangle':-45 if len(top_20)>10 else 0}, showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
             
